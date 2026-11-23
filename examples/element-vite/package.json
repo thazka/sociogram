@@ -1,0 +1,17 @@
+{
+  "name": "sociogram-example-element-vite",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "sociogram": "*"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "^8.3.8"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "ssr": false,
+  "build": ["npm", "run", "build"],
+  "start": ["npm", "run", "preview", "--", "--port", "{port}", "--strictPort", "--host", "127.0.0.1"],
+  "dev": ["npm", "run", "dev", "--", "--port", "{port}", "--strictPort", "--host", "127.0.0.1"]
+}

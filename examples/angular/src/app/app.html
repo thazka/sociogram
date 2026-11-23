@@ -1,0 +1,19 @@
+<main>
+  <h1>sociogram + Angular</h1>
+  <p>
+    <button id="toggle" (click)="toggle()">{{ shown() ? 'Unmount' : 'Mount' }}</button>
+    <span id="status" [attr.data-status]="shown() ? status() : 'unmounted'">{{ shown() ? status() : 'unmounted' }}</span>
+    clicks: <span id="clicks">{{ clicks() }}</span> hover: <span id="hover">{{ hover() ?? 'none' }}</span>
+  </p>
+  @if (shown()) {
+    <div class="graph">
+      <sociogram-view
+        [data]="graph"
+        (ready)="status.set('ready')"
+        (nodeclick)="clicks.update(count => count + 1)"
+        (nodehover)="onHover($event)"
+        (error)="onError($event)"
+      ></sociogram-view>
+    </div>
+  }
+</main>

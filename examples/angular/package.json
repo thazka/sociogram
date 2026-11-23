@@ -1,0 +1,27 @@
+{
+  "name": "sociogram-example-angular",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve",
+    "build": "ng build",
+    "serve:static": "http-server dist/angular/browser -a 127.0.0.1 -s"
+  },
+  "dependencies": {
+    "@angular/common": "^22.3.0",
+    "@angular/compiler": "^22.3.0",
+    "@angular/core": "^22.3.0",
+    "@angular/platform-browser": "^22.3.0",
+    "rxjs": "~7.8.0",
+    "sociogram": "*",
+    "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@angular/build": "^22.3.0",
+    "@angular/cli": "^22.3.0",
+    "@angular/compiler-cli": "^22.3.0",
+    "http-server": "^14.1.1",
+    "typescript": "~6.0.2"
+  }
+}

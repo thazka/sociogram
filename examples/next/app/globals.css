@@ -1,0 +1,4 @@
+html, body { margin: 0; background: #0b0e13; color: #c9d1d9; font: 14px system-ui, sans-serif; }
+main { padding: 12px; }
+.graph { height: 480px; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+button { margin-right: 8px; }

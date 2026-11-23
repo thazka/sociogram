@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>sociogram + Web Component</title>
+    <style>
+      html, body { margin: 0; background: #0b0e13; color: #c9d1d9; font: 14px system-ui, sans-serif; }
+      main { padding: 12px; }
+      .graph { height: 480px; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+      button { margin-right: 8px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>sociogram + Web Component</h1>
+      <p>
+        <button id="toggle">Unmount</button>
+        <span id="status" data-status="loading">loading</span>
+        clicks: <span id="clicks">0</span> hover: <span id="hover">none</span>
+      </p>
+      <div class="graph" id="host"></div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

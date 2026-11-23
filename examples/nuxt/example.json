@@ -1,0 +1,6 @@
+{
+  "ssr": true,
+  "build": ["npm", "run", "build"],
+  "start": ["npm", "run", "start"],
+  "dev": ["npm", "run", "dev", "--", "--port", "{port}", "--host", "127.0.0.1"]
+}

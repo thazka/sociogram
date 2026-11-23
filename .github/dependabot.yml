@@ -1,13 +1,21 @@
 version: 2
+# Monthly, with minor and patch updates of one ecosystem grouped into a single
+# pull request. Major versions stay separate so each one gets its own review.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      actions:
+        update-types: [minor, patch]
   - package-ecosystem: cargo
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      cargo:
+        update-types: [minor, patch]
     # wgpu and wasm-bindgen are pinned on purpose: their APIs change between
     # versions and the wasm-bindgen CLI must match the crate. Update them by hand.
     ignore:
@@ -16,8 +24,14 @@ updates:
   - package-ecosystem: npm
     directory: /packages/sociogram
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      npm-package:
+        update-types: [minor, patch]
   - package-ecosystem: npm
     directory: /web
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      npm-web:
+        update-types: [minor, patch]

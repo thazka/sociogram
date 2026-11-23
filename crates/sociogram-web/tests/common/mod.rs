@@ -9,13 +9,7 @@ pub const W: f32 = 200.0;
 pub const H: f32 = 100.0;
 
 pub fn context() -> Option<GpuContext> {
-    match pollster::block_on(GpuContext::new_headless()) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("skipping GPU test: {e}");
-            None
-        }
-    }
+    pollster::block_on(sociogram_gpu::testing::test_context())
 }
 
 pub fn target(ctx: &GpuContext) -> wgpu::TextureView {

@@ -68,11 +68,11 @@ The viewer lets you pick the number of nodes (up to 100,000), switch link detail
 ## Tests
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace                      # GPU tests skip themselves when no GPU adapter exists
-cd web && npm test                          # browser checks in headless Chrome (needs a GPU with WebGPU)
+node scripts/verify.mjs      # fmt, clippy, tests (GPU tests required), package build, browser checks
+cargo test --workspace       # just the Rust tests; GPU tests skip themselves without a real GPU
 ```
+
+CI runs formatting, clippy and the tests that need no GPU. The GPU and browser tests need a real GPU, so `scripts/verify.mjs` runs them locally (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 On Windows the engine defaults to DX12 (the Vulkan backend crashes on some Intel drivers). Set `WGPU_BACKEND=vulkan|dx12|gl|metal` to override. Set `CHROME` to point the browser tests at a specific executable.
 

@@ -19,15 +19,15 @@ See "Build from source" in the [README](README.md). You need Rust (stable), the 
 ## Before you open a pull request
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p sociogram-web --target wasm32-unknown-unknown -- -D warnings
-cargo test --workspace
-(cd packages/sociogram && npm run build)
-(cd web && npm test)        # if your change touches rendering, layout or the browser API
+node scripts/verify.mjs               # fmt, clippy (native + wasm32), tests, package build, browser tests
+node scripts/verify.mjs --no-browser  # the same without the headless-Chrome checks
 ```
 
-GPU tests skip themselves when no adapter is available, so please run them on a machine with a GPU for changes to `sociogram-gpu` or `sociogram-web`. Try more than one backend when you can (`WGPU_BACKEND=dx12`, `vulkan`, `gl`, `metal`).
+**CI does not run the GPU tests.** Free CI runners have no GPU, so those tests skip themselves there (CI prints how many were skipped). That means a green CI badge says nothing about rendering or layout. `scripts/verify.mjs` sets `SOCIOGRAM_REQUIRE_GPU=1`, so on your machine a missing GPU is a failure, not a skip. Please run it for any change to `sociogram-gpu`, `sociogram-web` or the browser API, try more than one backend when you can (`WGPU_BACKEND=dx12`, `vulkan`, `gl`, `metal`), and say in the pull request what you ran it on.
+
+To run it automatically before every push: `git config core.hooksPath .githooks`.
+
+Tests that need a GPU use `sociogram_gpu::testing::test_context()`. It skips on machines without a real GPU, and the environment variables `SOCIOGRAM_REQUIRE_GPU=1` (fail instead of skip) and `SOCIOGRAM_SOFTWARE_GPU=1` (also run on software rasterizers such as lavapipe) change that.
 
 ## Code guidelines
 

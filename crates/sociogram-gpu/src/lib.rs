@@ -2,6 +2,7 @@ mod context;
 mod instances;
 mod layout;
 mod renderer;
+pub mod testing;
 
 pub use context::{GpuContext, GpuError};
 pub use instances::{instances_from_graph, LinkInstance, NodeInstance};

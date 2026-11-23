@@ -30,16 +30,26 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Clippy (wasm32)
         run: cargo clippy -p sociogram-web --target wasm32-unknown-unknown -- -D warnings
-      # GitHub runners have no GPU, so the GPU tests skip themselves here. They
-      # run in the next job on a software Vulkan driver.
+      # Free runners have no GPU, so the GPU tests skip themselves here (they
+      # also skip on software adapters). Run `node scripts/verify.mjs` on a
+      # machine with a real GPU before pushing: it requires the GPU tests.
       - name: Tests
-        run: cargo test --workspace
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          cargo test --workspace -- --nocapture 2>&1 | tee test.log || status=$?
+          skipped=$(grep -c "skipping GPU test" test.log || true)
+          echo "::notice title=GPU tests::${skipped} GPU test(s) skipped on this runner (no real GPU). They are verified locally with scripts/verify.mjs."
+          grep -E "^test .* FAILED|panicked at" test.log | head -20 | while read -r line; do echo "::error::${line}"; done
+          exit "$status"
 
   gpu-software:
-    name: GPU tests on a software Vulkan driver (experimental)
+    name: GPU tests on a software Vulkan driver (informational)
     runs-on: ubuntu-latest
-    # Pixel-exact assertions were written against real GPUs; a software
-    # rasterizer may differ slightly. Failures here are informational.
+    # Pixel assertions were written against real GPUs and a software rasterizer
+    # may differ slightly, so this job never blocks a merge. It shows how much of
+    # the GPU test suite also passes without a GPU.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -48,9 +58,16 @@ jobs:
       - name: Install a software Vulkan driver (lavapipe)
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers libvulkan1
       - name: Tests
+        shell: bash
         env:
           WGPU_BACKEND: vulkan
-        run: cargo test --workspace
+          SOCIOGRAM_SOFTWARE_GPU: "1"
+        run: |
+          set -o pipefail
+          status=0
+          cargo test --workspace -- --nocapture 2>&1 | tee test.log || status=$?
+          grep -E "^test .* FAILED|panicked at" test.log | head -30 | while read -r line; do echo "::warning::${line}"; done
+          exit "$status"
 
   package:
     name: npm package (wasm build and TypeScript)

@@ -94,3 +94,11 @@ impl GpuContext {
         ))
     }
 }
+
+impl GpuContext {
+    /// True when the adapter is a software rasterizer (for example lavapipe,
+    /// llvmpipe or WARP) rather than a real GPU.
+    pub fn is_software(&self) -> bool {
+        self.adapter.get_info().device_type == wgpu::DeviceType::Cpu
+    }
+}

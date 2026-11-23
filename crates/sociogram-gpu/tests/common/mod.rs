@@ -10,13 +10,7 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// A GPU context, or `None` (with a note on stderr) when no adapter exists, so
 /// GPU tests skip instead of failing on machines without a GPU.
 pub fn context() -> Option<GpuContext> {
-    match pollster::block_on(GpuContext::new_headless()) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("skipping GPU test: {e}");
-            None
-        }
-    }
+    pollster::block_on(sociogram_gpu::testing::test_context())
 }
 
 /// Render into an offscreen texture on a black background and return RGBA

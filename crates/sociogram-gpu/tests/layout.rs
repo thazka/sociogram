@@ -3,13 +3,7 @@ use sociogram_core::{Graph, GraphData, GridLayout, GridLayoutConfig, LayoutConfi
 use sociogram_gpu::{GpuContext, GpuError, GpuLayout, MAX_GPU_NODES};
 
 fn context() -> Option<GpuContext> {
-    match pollster::block_on(GpuContext::new_headless()) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("skipping GPU test: {e}");
-            None
-        }
-    }
+    pollster::block_on(sociogram_gpu::testing::test_context())
 }
 
 fn pure(spring: f32, gravity: f32, repulsion: f32) -> GridLayoutConfig {

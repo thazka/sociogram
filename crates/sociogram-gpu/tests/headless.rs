@@ -100,10 +100,10 @@ fn empty_scene_renders_only_background() {
 }
 
 /// The link in `POSITIONS` is 40 px long at zoom 1; its middle pixel is (32, 17).
-fn link_pixel(fade: Option<(f32, f32)>) -> [u8; 4] {
-    let Some(ctx) = context() else {
-        return [0, 255, 0, 255];
-    };
+///
+/// `None` when there is no GPU to render on: the caller must skip the test.
+fn link_pixel(fade: Option<(f32, f32)>) -> Option<[u8; 4]> {
+    let ctx = context()?;
     let cam = Camera::new([W as f32, H as f32]);
     let data = render(&ctx, &cam, |r, device| {
         let positions = Renderer::upload_positions(device, &POSITIONS);
@@ -113,24 +113,32 @@ fn link_pixel(fade: Option<(f32, f32)>) -> [u8; 4] {
             r.set_link_fade(start, end);
         }
     });
-    px(&data, 32, 17)
+    Some(px(&data, 32, 17))
 }
 
 #[test]
 fn links_longer_than_the_fade_range_are_not_drawn() {
     // 40 px link, fade range 10..30 px: fully faded.
-    assert_eq!(link_pixel(Some((10.0, 30.0))), [0, 0, 0, 255]);
+    let Some(p) = link_pixel(Some((10.0, 30.0))) else {
+        return;
+    };
+    assert_eq!(p, [0, 0, 0, 255]);
 }
 
 #[test]
 fn links_shorter_than_the_fade_range_stay_fully_visible() {
-    assert_eq!(link_pixel(Some((50.0, 100.0))), [0, 255, 0, 255]);
+    let Some(p) = link_pixel(Some((50.0, 100.0))) else {
+        return;
+    };
+    assert_eq!(p, [0, 255, 0, 255]);
 }
 
 #[test]
 fn links_inside_the_fade_range_are_partly_transparent() {
     // 40 px link, range 20..60 px: visibility 0.5 over a black background.
-    let p = link_pixel(Some((20.0, 60.0)));
+    let Some(p) = link_pixel(Some((20.0, 60.0))) else {
+        return;
+    };
     assert!(
         p[1] > 100 && p[1] < 160,
         "green channel {} not near half",
@@ -149,8 +157,11 @@ fn invalid_fade_ranges_are_ignored() {
         (30.0, 30.0),
         (0.0, 0.0),
     ] {
+        let Some(p) = link_pixel(Some((start, end))) else {
+            return;
+        };
         assert_eq!(
-            link_pixel(Some((start, end))),
+            p,
             [0, 255, 0, 255],
             "range ({start}, {end}) should be ignored"
         );

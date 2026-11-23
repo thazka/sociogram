@@ -9,6 +9,8 @@
 //! - `SOCIOGRAM_REQUIRE_GPU=1`: a missing or software-only adapter is a failure,
 //!   not a skip. Use it before pushing so "skipped" can never pass silently.
 //! - `SOCIOGRAM_SOFTWARE_GPU=1`: let tests run on software adapters too.
+//! - `SOCIOGRAM_NO_GPU=1`: pretend there is no adapter, to run the suite the way
+//!   CI sees it (every GPU test must skip cleanly, none may fail).
 
 use crate::context::GpuContext;
 
@@ -48,7 +50,11 @@ fn flag(name: &str) -> bool {
 /// reason is printed). Panics when `SOCIOGRAM_REQUIRE_GPU` demands a GPU that
 /// is not there.
 pub async fn test_context() -> Option<GpuContext> {
-    let context = GpuContext::new_headless().await.ok();
+    let context = if flag("SOCIOGRAM_NO_GPU") {
+        None
+    } else {
+        GpuContext::new_headless().await.ok()
+    };
     let decision = decide(
         context.as_ref().map(GpuContext::is_software),
         flag("SOCIOGRAM_SOFTWARE_GPU"),

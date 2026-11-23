@@ -41,7 +41,10 @@ jobs:
           cargo test --workspace -- --nocapture 2>&1 | tee test.log || status=$?
           skipped=$(grep -c "skipping GPU test" test.log || true)
           echo "::notice title=GPU tests::${skipped} GPU test(s) skipped on this runner (no real GPU). They are verified locally with scripts/verify.mjs."
-          grep -E "^test .* FAILED|panicked at" test.log | head -20 | while read -r line; do echo "::error::${line}"; done
+          if [ "$status" != 0 ]; then
+            grep -E -A3 "panicked at" test.log | head -40 | while read -r line; do echo "::error::${line}"; done
+            tail -20 test.log | while read -r line; do echo "::error title=end of test log::${line}"; done
+          fi
           exit "$status"
 
   gpu-software:
@@ -66,7 +69,10 @@ jobs:
           set -o pipefail
           status=0
           cargo test --workspace -- --nocapture 2>&1 | tee test.log || status=$?
-          grep -E "^test .* FAILED|panicked at" test.log | head -30 | while read -r line; do echo "::warning::${line}"; done
+          if [ "$status" != 0 ]; then
+            grep -E -A3 "panicked at" test.log | head -40 | while read -r line; do echo "::warning::${line}"; done
+            tail -20 test.log | while read -r line; do echo "::warning title=end of test log::${line}"; done
+          fi
           exit "$status"
 
   package:

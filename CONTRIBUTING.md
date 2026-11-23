@@ -27,7 +27,9 @@ node scripts/verify.mjs --no-browser  # the same without the headless-Chrome che
 
 To run it automatically before every push: `git config core.hooksPath .githooks`.
 
-Tests that need a GPU use `sociogram_gpu::testing::test_context()`. It skips on machines without a real GPU, and the environment variables `SOCIOGRAM_REQUIRE_GPU=1` (fail instead of skip) and `SOCIOGRAM_SOFTWARE_GPU=1` (also run on software rasterizers such as lavapipe) change that.
+Tests that need a GPU use `sociogram_gpu::testing::test_context()`. It skips on machines without a real GPU, and the environment variables `SOCIOGRAM_REQUIRE_GPU=1` (fail instead of skip) and `SOCIOGRAM_SOFTWARE_GPU=1` (also run on software rasterizers such as lavapipe) change that. `SOCIOGRAM_NO_GPU=1` pretends there is no GPU, which runs the suite the way CI sees it: every GPU test must skip cleanly and none may fail.
+
+When you write a GPU test, a skipped test must return early (`let Some(ctx) = context() else { return };`). Never return made-up data from a helper to keep a skipped test passing.
 
 ## Code guidelines
 

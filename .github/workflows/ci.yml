@@ -68,7 +68,9 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          cargo test --workspace -- --nocapture 2>&1 | tee test.log || status=$?
+          # One thread: the software driver has segfaulted before, and with the
+          # tests in sequence the last test name in the log is the one that did it.
+          cargo test --workspace -- --nocapture --test-threads=1 2>&1 | tee test.log || status=$?
           if [ "$status" != 0 ]; then
             grep -E -A3 "panicked at" test.log | head -40 | while read -r line; do echo "::warning::${line}"; done
             tail -20 test.log | while read -r line; do echo "::warning title=end of test log::${line}"; done

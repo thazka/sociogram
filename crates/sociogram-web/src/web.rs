@@ -204,6 +204,18 @@ impl Sociogram {
         Ok(())
     }
 
+    /// Start waiting for the GPU to finish everything submitted so far; check with `poll_idle`.
+    pub fn request_idle(&mut self) -> Result<(), JsError> {
+        let inner = self.inner_mut()?;
+        inner.scene.request_idle(&inner.ctx.queue);
+        Ok(())
+    }
+
+    /// True once, when the GPU has finished the work present at the last `request_idle`.
+    pub fn poll_idle(&mut self) -> Result<bool, JsError> {
+        Ok(self.inner_mut()?.scene.poll_idle())
+    }
+
     /// Restart the layout so the graph moves again.
     pub fn reheat(&mut self) -> Result<(), JsError> {
         self.inner_mut()?.scene.reheat();

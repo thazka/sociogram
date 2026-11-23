@@ -62,6 +62,14 @@ export interface Mounted {
   destroy(): void;
   /** The view once it is ready, `undefined` before that and after `destroy()`. */
   readonly view: SociogramView | undefined;
+  /**
+   * Resolves with the view once it exists and the GPU has finished the data
+   * applied so far (pipelines compiled, graph uploaded, first frame drawn).
+   * Resolves `undefined`, never rejects, if creation failed or the mount was
+   * destroyed first; the failure itself goes to `onError`. Data passed to
+   * `update` afterwards is not awaited.
+   */
+  readonly ready: Promise<SociogramView | undefined>;
 }
 
 const defaultDeps: MountDeps = {
@@ -129,13 +137,15 @@ export function mountSociogram(
     }
   };
 
-  deps
+  // `ready` never rejects: failures are reported through `onError`, and a
+  // promise nobody awaits must not raise an unhandled rejection.
+  const ready = deps
     .create(canvas, { ...config.options })
-    .then((created) => {
+    .then(async (created): Promise<SociogramView | undefined> => {
       if (destroyed) {
         // Unmounted while the GPU was still starting: give everything back.
         created.destroy();
-        return;
+        return undefined;
       }
       view = created;
       unsubscribe.push(
@@ -149,10 +159,22 @@ export function mountSociogram(
       } catch (e) {
         report(e, "callback"); // the host's bug must not unmount a working view
       }
+      try {
+        await created.whenIdle();
+      } catch (e) {
+        // Destroyed meanwhile (not an error) or the GPU never answered.
+        if (!destroyed) report(e, "render");
+        return undefined;
+      }
+      return destroyed ? undefined : created;
     })
-    .catch((e: unknown) => report(e, "create"));
+    .catch((e: unknown) => {
+      report(e, "create");
+      return undefined;
+    });
 
   return {
+    ready,
     update(props) {
       if (destroyed) return;
       wanted = { ...wanted, ...definedOnly(props) };

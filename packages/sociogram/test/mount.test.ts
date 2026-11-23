@@ -14,6 +14,7 @@ function fakeView() {
     setData: vi.fn<(d: GraphData) => void>(),
     setLinkFade: vi.fn<(m: unknown) => void>(),
     destroy: vi.fn<() => void>(),
+    whenIdle: vi.fn<() => Promise<void>>(() => Promise.resolve()),
     on: vi.fn((event: string, fn: Listener) => {
       let set = listeners.get(event);
       if (set === undefined) listeners.set(event, (set = new Set()));
@@ -320,5 +321,74 @@ describe("mountSociogram", () => {
     expect(onError.mock.calls[0]?.[1]).toBe("callback");
     expect(m.view).toBe(f.asView);
     expect(() => m.destroy()).not.toThrow();
+  });
+
+  describe("ready", () => {
+    it("resolves with the view only after the GPU is idle, with the data already applied", async () => {
+      const { deps, container, pending } = setup();
+      const data = graph();
+      const m = mountSociogram(container, { initial: { data } }, deps);
+      const f = fakeView();
+      const idle = deferred<void>();
+      f.view.whenIdle.mockReturnValue(idle.promise);
+      let settled = false;
+      void m.ready.then(() => (settled = true));
+
+      pending.resolve(f.asView);
+      await flush();
+      expect(f.view.setData).toHaveBeenCalledWith(data);
+      expect(settled).toBe(false);
+
+      idle.resolve();
+      await expect(m.ready).resolves.toBe(f.asView);
+    });
+
+    it("resolves undefined, and reports the error, when the view cannot be created", async () => {
+      const { deps, container, pending } = setup();
+      const onError = vi.fn();
+      const m = mountSociogram(container, { callbacks: () => ({ onError }) }, deps);
+      pending.reject(new Error("no gpu"));
+      await expect(m.ready).resolves.toBeUndefined();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0]?.[1]).toBe("create");
+    });
+
+    it("resolves undefined, without an error, when destroyed while waiting for the GPU", async () => {
+      const { deps, container, pending } = setup();
+      const onError = vi.fn();
+      const m = mountSociogram(container, { callbacks: () => ({ onError }) }, deps);
+      const f = fakeView();
+      const idle = deferred<void>();
+      f.view.whenIdle.mockReturnValue(idle.promise);
+      pending.resolve(f.asView);
+      await flush();
+
+      m.destroy();
+      idle.reject(new Error("destroyed while waiting for the GPU"));
+      await expect(m.ready).resolves.toBeUndefined();
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it("resolves undefined when destroyed before the view exists", async () => {
+      const { deps, container, pending } = setup();
+      const m = mountSociogram(container, {}, deps);
+      m.destroy();
+      const f = fakeView();
+      pending.resolve(f.asView);
+      await expect(m.ready).resolves.toBeUndefined();
+      expect(f.view.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a GPU that never answers as a render error and still resolves", async () => {
+      const { deps, container, pending } = setup();
+      const onError = vi.fn();
+      const m = mountSociogram(container, { callbacks: () => ({ onError }) }, deps);
+      const f = fakeView();
+      f.view.whenIdle.mockRejectedValue(new Error("the GPU did not become idle in time"));
+      pending.resolve(f.asView);
+      await expect(m.ready).resolves.toBeUndefined();
+      expect(onError.mock.calls[0]?.[1]).toBe("render");
+      expect(m.view).toBe(f.asView); // the view itself stays usable
+    });
   });
 });

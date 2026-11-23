@@ -222,3 +222,38 @@ fn snapshots_can_be_requested_while_the_layout_is_running() {
         .unwrap();
     assert!(scene.poll_snapshot());
 }
+
+#[test]
+fn the_idle_fence_reports_once_when_the_gpu_has_finished() {
+    let Some(ctx) = context() else { return };
+    let mut scene = Scene::new(&ctx.device, FORMAT, [W, H], frozen());
+    assert!(!scene.poll_idle(), "nothing was asked yet");
+
+    scene.set_data(&ctx.device, two_nodes()).unwrap();
+    let view = target(&ctx);
+    scene.frame(&ctx.device, &ctx.queue, &view);
+    scene.request_idle(&ctx.queue);
+    ctx.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+
+    assert!(scene.poll_idle(), "the GPU is done");
+    assert!(!scene.poll_idle(), "it is reported once");
+}
+
+#[test]
+fn asking_for_idle_again_starts_a_new_wait() {
+    let Some(ctx) = context() else { return };
+    let mut scene = Scene::new(&ctx.device, FORMAT, [W, H], frozen());
+    scene.request_idle(&ctx.queue);
+    ctx.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    assert!(scene.poll_idle());
+
+    scene.request_idle(&ctx.queue);
+    ctx.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    assert!(scene.poll_idle());
+}

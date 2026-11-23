@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sociogram ready probe</title>
+<style>html,body{margin:0;background:#000}#c{width:800px;height:600px;display:block}</style>
+<canvas id="c"></canvas>
+<script type="module">
+// Measures what the GPU idle fence (SociogramView.whenIdle) tells us about startup,
+// and whether awaiting it before the first frame changes the frame gaps users see.
+const params = new URLSearchParams(location.search);
+const n = Number(params.get("n") ?? 100000);
+const awaitIdle = params.get("idle") !== "0";
+const t0 = performance.now();
+const log = {};
+const phases = [];
+let phase = "boot";
+let maxGap = {};
+let last = performance.now();
+const tick = (now) => {
+  const gap = now - last;
+  last = now;
+  if (gap > (maxGap[phase] ?? 0)) maxGap[phase] = gap;
+  requestAnimationFrame(tick);
+};
+requestAnimationFrame(tick);
+let maxTimer = {};
+let lastTimer = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const gap = now - lastTimer;
+  lastTimer = now;
+  if (gap > (maxTimer[phase] ?? 0)) maxTimer[phase] = gap;
+}, 10);
+const mark = (name) => { phases.push([name, Math.round(performance.now() - t0)]); phase = name; };
+try {
+  const { SociogramView } = await import("/packages/sociogram/dist/view.js");
+  mark("create");
+  const canvas = document.getElementById("c");
+  const view = await SociogramView.create(canvas, {});
+  mark("setData");
+  let seed = 1;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const per = 5;
+  const edges = new Uint32Array(n * per * 2);
+  for (let i = 0; i < n * per; i++) { edges[i * 2] = Math.floor(i / per); edges[i * 2 + 1] = Math.floor(rnd() * n); }
+  view.setData({ nodeCount: n, edges });
+  if (awaitIdle) {
+    mark("whenIdle");
+    const s = performance.now();
+    await view.whenIdle();
+    log.idleWaitMs = Math.round(performance.now() - s);
+  }
+  mark("settle");
+  await new Promise((r) => setTimeout(r, 3000));
+  mark("done");
+  log.phases = phases;
+  log.maxRafGapMs = Object.fromEntries(Object.entries(maxGap).map(([k, v]) => [k, Math.round(v)]));
+  log.maxTimerGapMs = Object.fromEntries(Object.entries(maxTimer).map(([k, v]) => [k, Math.round(v)]));
+  window.__log = log;
+  window.__ready = true;
+} catch (e) {
+  window.__error = `${e.name}: ${e.message}`;
+}
+</script>

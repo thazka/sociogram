@@ -107,6 +107,9 @@ pub struct Scene {
     auto_fit: bool,
     /// True while a batch of layout steps is still executing on the GPU.
     layout_busy: Arc<AtomicBool>,
+    /// Set by the GPU when everything submitted before `request_idle` has finished.
+    idle_done: Arc<AtomicBool>,
+    idle_waiting: bool,
 }
 
 fn bounds(points: &[[f32; 2]]) -> Option<([f32; 2], [f32; 2])> {
@@ -145,6 +148,8 @@ impl Scene {
             readback: None,
             auto_fit: true,
             layout_busy: Arc::new(AtomicBool::new(false)),
+            idle_done: Arc::new(AtomicBool::new(false)),
+            idle_waiting: false,
         }
     }
 
@@ -264,6 +269,27 @@ impl Scene {
             LinkFade::Auto => (0.0, 0.0),
         };
         self.renderer.set_link_fade(start, end);
+    }
+
+    /// Ask to be told when the GPU has finished everything submitted so far
+    /// (pipelines compiled, buffers uploaded, the first layout steps and frame).
+    /// Check with [`Scene::poll_idle`]; on native targets the caller must also
+    /// poll the device. Asking again before the answer arrives starts over.
+    pub fn request_idle(&mut self, queue: &wgpu::Queue) {
+        self.idle_done.store(false, Ordering::Release);
+        let done = Arc::clone(&self.idle_done);
+        queue.on_submitted_work_done(move || done.store(true, Ordering::Release));
+        self.idle_waiting = true;
+    }
+
+    /// True once, when the GPU has finished the work present at the last
+    /// [`Scene::request_idle`]. False while still waiting and when nothing was asked.
+    pub fn poll_idle(&mut self) -> bool {
+        if self.idle_waiting && self.idle_done.load(Ordering::Acquire) {
+            self.idle_waiting = false;
+            return true;
+        }
+        false
     }
 
     /// Restart the layout cooling so the graph moves again.

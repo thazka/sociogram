@@ -107,6 +107,15 @@ try {
   const pngSig = [137, 80, 78, 71, 13, 10, 26, 10];
   check("screenshot() returns a PNG at buffer size", JSON.stringify(info.head) === JSON.stringify(pngSig) && info.w === 600 && info.h === 400, JSON.stringify({ w: info.w, h: info.h, size: info.size }));
 
+  // whenIdle(): resolves once the GPU has finished, repeatedly
+  const idle = await page.evaluate(`(async () => {
+    const t = performance.now();
+    await window.__view.whenIdle();
+    await window.__view.whenIdle();
+    return performance.now() - t;
+  })()`);
+  check("whenIdle() resolves (twice in a row)", idle >= 0 && idle < 10000, `${Math.round(idle)} ms`);
+
   // invalid data is rejected and does not break the view
   const bad = await page.evaluate(`(() => { try { window.__view.setData({ nodeCount: 2, edges: [0, 9] }); return "no error"; } catch (e) { return e.message; } })()`);
   check("invalid data throws a clear error", /invalid graph/i.test(bad), bad);

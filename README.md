@@ -65,6 +65,8 @@ view.destroy(); // releases the GPU; safe to call twice
 
 `create()` rejects with `WebGpuUnsupportedError` when the browser cannot run WebGPU, and with `WasmLoadError` when the engine file cannot be loaded. Invalid data makes `setData()` throw and keeps the previous graph.
 
+`await view.whenIdle()` resolves once the GPU has finished what was submitted so far (shaders compiled, graph uploaded, first frame drawn); on the development machine that took about 0.25 s for 100,000 nodes. `mountSociogram(...).ready` is the same wait after the view is created and the initial props are applied; it resolves `undefined` instead of rejecting when creation failed or the mount was destroyed. Use them to hide a loading state. They do not speed anything up: in 6 cold-start runs here (headless Chrome, Intel integrated GPU) the first seconds showed no multi-second stall either way, so the occasional stall seen earlier in a benchmark page is still unexplained.
+
 ## Use it in your framework
 
 One package, `sociogram`, with an entry point per framework. React, Vue and Angular are optional: installing `sociogram` does not install them. Each example below is a complete, tested app in [`examples/`](examples/README.md).

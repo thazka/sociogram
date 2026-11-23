@@ -8,6 +8,7 @@ const CLICK_SLOP = 4;
 /** Frames between position snapshots used for picking. */
 const SNAPSHOT_EVERY = 6;
 const CAPTURE_TIMEOUT_MS = 10_000;
+const IDLE_TIMEOUT_MS = 30_000;
 
 export interface GraphData {
   nodeCount: number;
@@ -148,6 +149,23 @@ export class SociogramView {
       // CSS pixels to drawing-buffer pixels.
       const scale = this.#canvas.width / Math.max(this.#canvas.getBoundingClientRect().width, 1);
       engine.set_link_fade(startPx * scale, endPx * scale);
+    }
+  }
+
+  /**
+   * Resolve when the GPU has finished everything submitted so far (pipelines
+   * compiled, buffers uploaded, first layout steps and frame). Rejects if the
+   * view is destroyed meanwhile or the GPU does not answer in time.
+   */
+  async whenIdle(timeoutMs = IDLE_TIMEOUT_MS): Promise<void> {
+    this.#live().request_idle();
+    const start = performance.now();
+    for (;;) {
+      const engine = this.#engine;
+      if (engine === undefined) throw new Error("destroyed while waiting for the GPU");
+      if (engine.poll_idle()) return;
+      if (performance.now() - start > timeoutMs) throw new Error("the GPU did not become idle in time");
+      await new Promise((r) => setTimeout(r, 4));
     }
   }
 

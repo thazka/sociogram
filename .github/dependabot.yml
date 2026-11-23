@@ -28,6 +28,11 @@ updates:
     groups:
       npm-package:
         update-types: [minor, patch]
+    # @types/node should match the Node version CI and contributors run (24),
+    # not the newest one: a newer major declares APIs that do not exist there.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /web
     schedule:

@@ -23,3 +23,7 @@ docs/superpowers/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Copied from the repository root by `npm pack` (see packages/sociogram/scripts/prepack.mjs)
+packages/*/LICENSE-*
+web/example-shots/

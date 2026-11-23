@@ -1,3 +1,4 @@
+import { WasmLoadError, WebGpuUnsupportedError } from "./errors.js";
 import init, { Sociogram } from "./wasm/sociogram_web.js";
 
 /** Largest drawing-buffer side, matching the engine's limit. */
@@ -19,6 +20,16 @@ export interface GraphData {
   /** RGBA (0..1), four numbers per node. */
   colors?: Float32Array;
 }
+
+/**
+ * How long links fade out (they dominate the cost of drawing large graphs).
+ *
+ * - `"auto"` (default): nothing changes for small graphs; graphs with 50,000 or
+ *   more links fade links between 1/8 and 3/8 of the viewport size.
+ * - `"off"`: always draw every link at full strength.
+ * - `{ startPx, endPx }`: fade between these on-screen lengths, in CSS pixels.
+ */
+export type LinkFadeMode = "auto" | "off" | { startPx: number; endPx: number };
 
 export interface SociogramOptions {
   /** Where to load `sociogram_web_bg.wasm` from. Defaults to next to the module. */
@@ -45,16 +56,13 @@ function loadWasm(url: string | URL | undefined): Promise<unknown> {
   wasmReady ??= init(url === undefined ? undefined : { module_or_path: url }).catch(
     (e: unknown) => {
       wasmReady = undefined;
-      throw e;
+      throw new WasmLoadError(e);
     },
   );
   return wasmReady;
 }
 
-/** Thrown by `SociogramView.create` when the browser cannot run the engine. */
-export class WebGpuUnsupportedError extends Error {
-  override name = "WebGpuUnsupportedError";
-}
+export { WasmLoadError, WebGpuUnsupportedError };
 
 export class SociogramView {
   readonly #canvas: HTMLCanvasElement;
@@ -125,15 +133,10 @@ export class SociogramView {
   }
 
   /**
-   * Fade out long links, which dominate the cost of drawing large graphs.
-   *
-   * - `"auto"` (default): nothing changes for small graphs; graphs with 50,000
-   *   or more links fade links between 1/8 and 3/8 of the viewport size.
-   * - `"off"`: always draw every link at full strength.
-   * - `{ startPx, endPx }`: fade between these on-screen lengths, in CSS
-   *   pixels. Invalid ranges (not finite, negative, `endPx <= startPx`) throw.
+   * Fade out long links; see {@link LinkFadeMode}. Invalid ranges (not finite,
+   * negative, `endPx <= startPx`) throw a `RangeError`.
    */
-  setLinkFade(mode: "auto" | "off" | { startPx: number; endPx: number }): void {
+  setLinkFade(mode: LinkFadeMode): void {
     const engine = this.#live();
     if (mode === "auto") engine.set_link_fade_auto();
     else if (mode === "off") engine.set_link_fade_off();

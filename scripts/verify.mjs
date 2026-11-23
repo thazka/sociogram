@@ -31,6 +31,8 @@ const steps = [
     args: ["run", "build"],
     before: () => ensureInstalled("packages/sociogram"),
   },
+  { name: "npm package type check", cwd: "packages/sociogram", cmd: "npm", args: ["run", "typecheck"] },
+  { name: "npm package tests (lifecycle, server rendering)", cwd: "packages/sociogram", cmd: "npm", args: ["test"] },
 ];
 if (!skipBrowser) {
   steps.push({

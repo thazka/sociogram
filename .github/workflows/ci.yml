@@ -102,3 +102,21 @@ jobs:
         run: |
           npm ci
           npm run build
+      - name: Type check and unit tests (lifecycle, server rendering, public types)
+        working-directory: packages/sociogram
+        run: |
+          npm run typecheck
+          npm test
+      # Builds every example app against the packed package, the way a user's
+      # project would consume it. It needs no GPU. The browser checks do, and run
+      # locally (web/verify-example.mjs without --build-only).
+      # Informational until it has been green on GitHub once: it could not be run
+      # on a GitHub runner when it was written.
+      - name: Build the example apps from the packed package
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          (cd web && npm ci)
+          for example in react-vite vue-vite next nuxt angular element-vite; do
+            node web/verify-example.mjs "$example" --build-only
+          done

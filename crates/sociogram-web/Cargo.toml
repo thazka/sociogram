@@ -1,0 +1,27 @@
+[package]
+name = "sociogram-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WebAssembly bindings and scene logic for sociogram: GPU graph visualization in the browser."
+keywords = ["graph", "webgpu", "wasm", "visualization", "network"]
+categories = ["visualization", "graphics"]
+readme = "../../README.md"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sociogram-core = { path = "../sociogram-core" }
+sociogram-gpu = { path = "../sociogram-gpu" }
+wgpu = "30.0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4.80"
+web-sys = { version = "0.3.107", features = ["HtmlCanvasElement"] }
+console_error_panic_hook = "0.1.7"
+
+[dev-dependencies]
+pollster = "0.4"

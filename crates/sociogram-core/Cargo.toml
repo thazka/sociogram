@@ -1,0 +1,12 @@
+[package]
+name = "sociogram-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Graph storage, camera, picking and a reference force layout for sociogram. No GPU code, no dependencies."
+keywords = ["graph", "network", "visualization", "layout"]
+categories = ["visualization", "graphics"]
+readme = "../../README.md"
+
+[dependencies]

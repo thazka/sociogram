@@ -1,0 +1,14 @@
+{
+  "name": "sociogram-browser-tests",
+  "private": true,
+  "type": "module",
+  "description": "Demo pages, browser tests and benchmarks for sociogram. Not published.",
+  "scripts": {
+    "serve": "node serve.mjs",
+    "test": "node smoke2.mjs"
+  },
+  "devDependencies": {
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^25.18.1"
+  }
+}

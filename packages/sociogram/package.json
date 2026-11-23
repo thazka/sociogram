@@ -1,0 +1,26 @@
+{
+  "name": "sociogram",
+  "version": "0.1.0",
+  "description": "GPU-accelerated graph visualization for the browser (Rust + WebGPU). Framework neutral.",
+  "repository": { "type": "git", "url": "git+https://github.com/thazka/sociogram.git" },
+  "homepage": "https://github.com/thazka/sociogram#readme",
+  "bugs": { "url": "https://github.com/thazka/sociogram/issues" },
+  "keywords": ["graph", "network", "visualization", "webgpu", "wasm", "force-directed", "social-network-analysis"],
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "build": "npm run build:wasm && tsc -p tsconfig.json && node scripts/copy-wasm.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sociogram bench</title>
+<style>html,body{margin:0;background:#000}#c{width:800px;height:600px;display:block}</style>
+<canvas id="c"></canvas>
+<script type="module">
+import { SociogramView } from "/packages/sociogram/dist/index.js";
+const params = new URLSearchParams(location.search);
+const n = Number(params.get("n") ?? 100000);
+const perNode = Number(params.get("e") ?? 5);
+const longTasks = [];
+try { new PerformanceObserver((l) => { for (const e of l.getEntries()) longTasks.push([Math.round(e.startTime), Math.round(e.duration)]); }).observe({ entryTypes: ["longtask"] }); } catch {}
+window.__longTasks = longTasks;
+try {
+  const view = await SociogramView.create(document.getElementById("c"));
+  let seed = 1;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const edges = new Uint32Array(n * perNode * 2);
+  for (let i = 0; i < n * perNode; i++) { edges[i * 2] = Math.floor(i / perNode); edges[i * 2 + 1] = Math.floor(rnd() * n); }
+  const t0 = performance.now();
+  view.setData({ nodeCount: n, edges });
+  window.__setDataMs = performance.now() - t0;
+  // Count real display frames for a few seconds (independent of the engine's loop).
+  let frames = 0, last = performance.now(), worst = 0; const deltas = []; const stamps = [];
+  const start = last;
+  await new Promise((resolve) => {
+    const tick = (now) => {
+      frames++; stamps.push(now - start); deltas.push(now - last); worst = Math.max(worst, now - last); last = now;
+      if (now - start < Number(params.get('ms') ?? 6000)) requestAnimationFrame(tick); else resolve();
+    };
+    requestAnimationFrame(tick);
+  });
+  const rest = deltas.slice(5).sort((a, b) => a - b); const pct = (p) => rest.length ? rest[Math.min(rest.length - 1, Math.floor(rest.length * p))] : 0;
+  let worstAt = 0; deltas.forEach((d, i) => { if (d === worst) worstAt = stamps[i]; });
+  const steady = deltas.filter((_, i) => stamps[i] > 8000);
+  window.__bench = { worstAtMs: Math.round(worstAt), steadyWorstMs: Math.round(Math.max(0, ...steady)), steadyFrames: steady.length,  first5: deltas.slice(0, 5).map(Math.round), medianMs: pct(0.5), p95Ms: pct(0.95),  n, edges: n * perNode, frames, seconds: (last - start) / 1000, fps: frames / ((last - start) / 1000), worstFrameMs: worst, settled: false };
+  window.__ready = true;
+} catch (e) {
+  window.__error = `${e.name}: ${e.message}`;
+}
+</script>

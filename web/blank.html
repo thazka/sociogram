@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>minimal webgpu canvas</title>
+<style>html,body{margin:0;background:#000}#c{width:800px;height:600px;display:block}</style>
+<canvas id="c" width="800" height="600"></canvas>
+<script type="module">
+// No engine code at all: configure a WebGPU canvas and clear it every frame.
+// Shows what the browser itself costs at startup.
+const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice();
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("webgpu");
+const format = navigator.gpu.getPreferredCanvasFormat();
+ctx.configure({ device, format });
+const start = performance.now();
+let last = start, worst = 0, worstAt = 0, frames = 0;
+await new Promise((resolve) => {
+  const tick = (now) => {
+    const enc = device.createCommandEncoder();
+    enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1 }, loadOp: "clear", storeOp: "store" }] }).end();
+    device.queue.submit([enc.finish()]);
+    frames++;
+    const d = now - last;
+    if (d > worst) { worst = d; worstAt = now - start; }
+    last = now;
+    if (now - start < 12000) requestAnimationFrame(tick); else resolve();
+  };
+  requestAnimationFrame(tick);
+});
+window.__out = { frames, worstFrameMs: Math.round(worst), worstAtMs: Math.round(worstAt) };
+</script>

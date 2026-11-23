@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Must match the `wasm-bindgen` version pinned in crates/sociogram-web/Cargo.toml.
+  WASM_BINDGEN_VERSION: 0.2.130
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy (native)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (wasm32)
+        run: cargo clippy -p sociogram-web --target wasm32-unknown-unknown -- -D warnings
+      # GitHub runners have no GPU, so the GPU tests skip themselves here. They
+      # run in the next job on a software Vulkan driver.
+      - name: Tests
+        run: cargo test --workspace
+
+  gpu-software:
+    name: GPU tests on a software Vulkan driver (experimental)
+    runs-on: ubuntu-latest
+    # Pixel-exact assertions were written against real GPUs; a software
+    # rasterizer may differ slightly. Failures here are informational.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install a software Vulkan driver (lavapipe)
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+      - name: Tests
+        env:
+          WGPU_BACKEND: vulkan
+        run: cargo test --workspace
+
+  package:
+    name: npm package (wasm build and TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v6
+        id: bindgen-cache
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-cli-${{ env.WASM_BINDGEN_VERSION }}
+      - name: Install wasm-bindgen-cli
+        if: steps.bindgen-cache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/sociogram/package-lock.json
+      - name: Build
+        working-directory: packages/sociogram
+        run: |
+          npm ci
+          npm run build

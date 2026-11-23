@@ -1,0 +1,18 @@
+[package]
+name = "sociogram-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "wgpu renderer and GPU force-directed layout for large graphs."
+keywords = ["graph", "gpu", "wgpu", "layout", "visualization"]
+categories = ["visualization", "graphics"]
+readme = "../../README.md"
+
+[dependencies]
+sociogram-core = { path = "../sociogram-core" }
+wgpu = "30.0.2"
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+pollster = "0.4"

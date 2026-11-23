@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>raw webgpu layout bench</title>
+<script type="module">
+// Runs the exact layout compute shader with plain WebGPU (no wasm, no wgpu) so
+// browser/driver cost can be separated from the Rust layer. Variants are
+// selected with URL parameters.
+const q = new URLSearchParams(location.search);
+const n = Number(q.get("n") ?? 100000);
+const perNode = Number(q.get("e") ?? 5);
+const gridDim = Number(q.get("g") ?? 128);
+const repulsion = Number(q.get("rep") ?? 20);
+const shaderUrl = q.get("shader") ?? "/crates/sociogram-gpu/src/layout.wgsl";
+const accLevels = q.get("acc"); // limit accumulate to this many levels
+const steps = Number(q.get("steps") ?? 10);
+const space = Number(q.get("space") ?? 1024);
+const spread = Number(q.get("spread") ?? 50);
+
+const out = { n, perNode, gridDim, repulsion, shader: shaderUrl, acc: accLevels };
+try {
+  const adapter = await navigator.gpu.requestAdapter();
+  out.adapter = adapter.info.vendor + "/" + adapter.info.architecture;
+  const hasTs = adapter.features.has("timestamp-query");
+  out.timestampQuery = hasTs;
+  const device = await adapter.requestDevice({ requiredFeatures: hasTs ? ["timestamp-query"] : [] });
+  const errors = [];
+  device.addEventListener("uncapturederror", (e) => errors.push(e.error.message));
+
+  let code = await (await fetch(shaderUrl)).text();
+  if (accLevels !== null) {
+    // limit the accumulate pass loop (first occurrence of the level loop)
+    code = code.replace("for (var level = 0u; level < levels; level = level + 1u)", `for (var level = 0u; level < min(levels, ${Number(accLevels)}u); level = level + 1u)`);
+  }
+  const module = device.createShaderModule({ code });
+  const info = await module.getCompilationInfo();
+  out.compileMessages = info.messages.map((m) => m.type + ": " + m.message).slice(0, 3);
+
+  // ---- data
+  let seed = 1;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const pos = new Float32Array(n * 2);
+  for (let i = 0; i < n * 2; i++) pos[i] = (rnd() * 2 - 1) * spread;
+  const deg = new Uint32Array(n + 1);
+  const edges = [];
+  for (let i = 0; i < n * perNode; i++) {
+    const a = Math.floor(i / perNode), b = Math.floor(rnd() * n);
+    if (a !== b) { edges.push(a, b); deg[a + 1]++; deg[b + 1]++; }
+  }
+  for (let i = 0; i < n; i++) deg[i + 1] += deg[i];
+  const cursor = deg.slice();
+  const nbr = new Uint32Array(Math.max(deg[n], 1));
+  for (let i = 0; i < edges.length; i += 2) { const a = edges[i], b = edges[i + 1]; nbr[cursor[a]++] = b; nbr[cursor[b]++] = a; }
+
+  const S = GPUBufferUsage.STORAGE, CD = GPUBufferUsage.COPY_DST, CS = GPUBufferUsage.COPY_SRC;
+  const mk = (data, usage) => { const b = device.createBuffer({ size: Math.max(16, data.byteLength), usage: usage | CD }); device.queue.writeBuffer(b, 0, data); return b; };
+  const posA = mk(pos, S | CS), posB = mk(pos, S | CS);
+  const vel = mk(new Float32Array(n * 2), S);
+  const offsets = mk(deg, S), neighbors = mk(nbr, S);
+  let totalCells = 0; for (let l = 0; (gridDim >> l) >= 4; l++) totalCells += (gridDim >> l) ** 2;
+  const cells = device.createBuffer({ size: totalCells * 16, usage: S | CD });
+  const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | CD });
+
+  const C = GPUShaderStage.COMPUTE;
+  const e = (binding, type) => ({ binding, visibility: C, buffer: { type } });
+  const bgl0 = device.createBindGroupLayout({ entries: [e(0, "uniform"), e(1, "read-only-storage"), e(2, "storage"), e(3, "storage"), e(4, "read-only-storage"), e(5, "read-only-storage")] });
+  const bglAcc = device.createBindGroupLayout({ entries: [e(0, "storage")] });
+  const bglRo = device.createBindGroupLayout({ entries: [e(0, "read-only-storage")] });
+  const bglEmpty = device.createBindGroupLayout({ entries: [] });
+  const accLayout = device.createPipelineLayout({ bindGroupLayouts: [bgl0, bglAcc] });
+  const stepLayout = device.createPipelineLayout({ bindGroupLayouts: [bgl0, bglEmpty, bglRo] });
+  const accumulate = device.createComputePipeline({ layout: accLayout, compute: { module, entryPoint: "accumulate" } });
+  const step = device.createComputePipeline({ layout: stepLayout, compute: { module, entryPoint: "step" } });
+  const bind0 = (i, o) => device.createBindGroup({ layout: bgl0, entries: [
+    { binding: 0, resource: { buffer: params } }, { binding: 1, resource: { buffer: i } }, { binding: 2, resource: { buffer: o } },
+    { binding: 3, resource: { buffer: vel } }, { binding: 4, resource: { buffer: offsets } }, { binding: 5, resource: { buffer: neighbors } }] });
+  const binds = [bind0(posA, posB), bind0(posB, posA)];
+  const accBind = device.createBindGroup({ layout: bglAcc, entries: [{ binding: 0, resource: { buffer: cells } }] });
+  const roBind = device.createBindGroup({ layout: bglRo, entries: [{ binding: 0, resource: { buffer: cells } }] });
+  const emptyBind = device.createBindGroup({ layout: bglEmpty, entries: [] });
+
+  const ts = hasTs ? device.createQuerySet({ type: "timestamp", count: 4 }) : null;
+  const tsBuf = hasTs ? device.createBuffer({ size: 32, usage: GPUBufferUsage.QUERY_RESOLVE | CS }) : null;
+  const tsRead = hasTs ? device.createBuffer({ size: 32, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }) : null;
+
+  const groups = Math.ceil(n / 64);
+  let cur = 0;
+  const submitStep = (withTs) => {
+    device.queue.writeBuffer(params, 0, new Uint32Array([n, gridDim, 0, 0]));
+    device.queue.writeBuffer(params, 16, new Float32Array([0.02, repulsion, 0.1, 30, 0.2, 1.0, space, 0]));
+    const enc = device.createCommandEncoder();
+    enc.clearBuffer(cells);
+    const p1 = enc.beginComputePass(withTs && ts ? { timestampWrites: { querySet: ts, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : {});
+    p1.setPipeline(accumulate); p1.setBindGroup(0, binds[cur]); p1.setBindGroup(1, accBind); p1.dispatchWorkgroups(groups); p1.end();
+    const p2 = enc.beginComputePass(withTs && ts ? { timestampWrites: { querySet: ts, beginningOfPassWriteIndex: 2, endOfPassWriteIndex: 3 } } : {});
+    p2.setPipeline(step); p2.setBindGroup(0, binds[cur]); p2.setBindGroup(2, roBind); p2.setBindGroup(1, emptyBind); p2.dispatchWorkgroups(groups); p2.end();
+    if (withTs && ts) { enc.resolveQuerySet(ts, 0, 4, tsBuf, 0); enc.copyBufferToBuffer(tsBuf, 0, tsRead, 0, 32); }
+    device.queue.submit([enc.finish()]);
+    cur = 1 - cur;
+  };
+
+  // warm-up (pipeline compile) then timed steps
+  let t = performance.now();
+  submitStep(false);
+  await device.queue.onSubmittedWorkDone();
+  out.firstStepMs = Math.round(performance.now() - t);
+
+  t = performance.now();
+  for (let i = 0; i < steps; i++) submitStep(false);
+  const submitMs = performance.now() - t;
+  await device.queue.onSubmittedWorkDone();
+  out.msPerStep = Math.round(((performance.now() - t) / steps) * 10) / 10;
+  out.submitMs = Math.round(submitMs);
+
+  if (hasTs) {
+    submitStep(true);
+    await tsRead.mapAsync(GPUMapMode.READ);
+    const v = new BigUint64Array(tsRead.getMappedRange().slice(0));
+    tsRead.unmap();
+    out.gpuMs = { accumulate: Number(v[1] - v[0]) / 1e6, step: Number(v[3] - v[2]) / 1e6 };
+  }
+  out.errors = errors.slice(0, 3);
+  window.__out = out;
+} catch (err) {
+  window.__out = { ...out, error: String(err && err.message || err) };
+}
+</script>

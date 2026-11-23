@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sociogram bench2</title>
+<style>html,body{margin:0;background:#000}#c{width:800px;height:600px;display:block}</style>
+<canvas id="c" width="800" height="600"></canvas>
+<script type="module">
+import init, { Sociogram } from "/packages/sociogram/dist/wasm/sociogram_web.js";
+const params = new URLSearchParams(location.search);
+const n = Number(params.get("n") ?? 100000);
+const perNode = 5;
+const results = [];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+try {
+  await init();
+  const g = await Sociogram.create(document.getElementById("c"));
+  let seed = 1;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const edges = new Uint32Array(n * perNode * 2);
+  for (let i = 0; i < n * perNode; i++) { edges[i * 2] = Math.floor(i / perNode); edges[i * 2 + 1] = Math.floor(rnd() * n); }
+  g.set_data(n, edges, null, null, null);
+  const fade = params.get("fade");
+  if (fade) { const [a, b] = fade.split(",").map(Number); g.set_link_fade(a, b); }
+
+  // Time until the GPU has finished everything submitted so far, using the
+  // position snapshot (its copy runs after all earlier work) as the marker.
+  const drain = async () => {
+    const t = performance.now();
+    // The scene ignores snapshot requests while layout steps are still running, so keep asking.
+    for (;;) { g.request_snapshot(); if (g.poll_snapshot()) break; await sleep(1); if (performance.now() - t > 120000) throw new Error("drain timeout"); }
+    return performance.now() - t;
+  };
+  results.push(["first drain (pipeline compile + first work)", Math.round(await drain())]);
+  for (const frames of [1, 1, 1, 5, 5]) {
+    const t = performance.now();
+    for (let i = 0; i < frames; i++) g.frame();
+    const queuedMs = performance.now() - t;
+    const total = await drain();
+    results.push([`${frames} frame(s) = ${frames * 2} layout steps`, `${Math.round(total)} ms total, ${Math.round(total / (frames * 2))} ms/step (submit took ${Math.round(queuedMs)} ms)`]);
+  }
+  window.__log = results;
+  window.__ready = true;
+} catch (e) {
+  window.__error = `${e.name}: ${e.message}`;
+}
+</script>

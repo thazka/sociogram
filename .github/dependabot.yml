@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # wgpu and wasm-bindgen are pinned on purpose: their APIs change between
+    # versions and the wasm-bindgen CLI must match the crate. Update them by hand.
+    ignore:
+      - dependency-name: wgpu
+      - dependency-name: wasm-bindgen
+  - package-ecosystem: npm
+    directory: /packages/sociogram
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly

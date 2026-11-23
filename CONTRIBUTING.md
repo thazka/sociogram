@@ -27,6 +27,10 @@ node scripts/verify.mjs --no-browser  # the same without the headless-Chrome che
 
 To run it automatically before every push: `git config core.hooksPath .githooks`.
 
+**Changes to the npm package** (`packages/sociogram`) also need its unit, server-rendering and type tests (`npm test` and `npm run typecheck` there), and, if you touch a wrapper or the build, the example apps. `node web/verify-example.mjs <example>` packs the package like `npm publish` does, installs it into a temporary copy of the example, builds it and checks it in headless Chrome; add `--dev` for the dev server or `--serve` to open it yourself. See [examples/README.md](examples/README.md).
+
+A new framework wrapper should be a thin layer over `mountSociogram` (`packages/sociogram/src/mount.ts`), which owns the part that is easy to get wrong: a component unmounted before the view finished creating, and StrictMode mounting twice. It needs an example that passes the same checks as the others.
+
 Tests that need a GPU use `sociogram_gpu::testing::test_context()`. It skips on machines without a real GPU, and the environment variables `SOCIOGRAM_REQUIRE_GPU=1` (fail instead of skip) and `SOCIOGRAM_SOFTWARE_GPU=1` (also run on software rasterizers such as lavapipe) change that. `SOCIOGRAM_NO_GPU=1` pretends there is no GPU, which runs the suite the way CI sees it: every GPU test must skip cleanly and none may fail.
 
 When you write a GPU test, a skipped test must return early (`let Some(ctx) = context() else { return };`). Never return made-up data from a helper to keep a skipped test passing.

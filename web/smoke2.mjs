@@ -116,6 +116,77 @@ try {
   })()`);
   check("whenIdle() resolves (twice in a row)", idle >= 0 && idle < 10000, `${Math.round(idle)} ms`);
 
+  // two isolated nodes that are really inside the canvas (earlier checks panned, zoomed and resized it)
+  const pair = await page.evaluate(`(() => {
+    const v = window.__view;
+    const r = document.querySelector("canvas").getBoundingClientRect();
+    const pts = [];
+    for (let i = 0; i < 400; i++) {
+      const p = v.nodeScreenPosition(i);
+      if (p === undefined) break;
+      if (p.x > r.left + 30 && p.x < r.right - 30 && p.y > r.top + 30 && p.y < r.bottom - 30) pts.push({ i, x: p.x, y: p.y });
+    }
+    const alone = (a) => pts.every((b) => b.i === a.i || Math.hypot(a.x - b.x, a.y - b.y) > 25);
+    const a = pts.find(alone);
+    const b = a && pts.find((p) => alone(p) && Math.hypot(p.x - a.x, p.y - a.y) > 120);
+    return a && b ? { a, b } : null;
+  })()`);
+  check("two isolated nodes are on the canvas for the pointer checks", pair !== null, JSON.stringify(pair));
+  if (pair !== null) {
+    // drag node a: it follows the pointer, the camera (and the far node b) do not move
+    await page.mouse.move(pair.a.x, pair.a.y);
+    await page.mouse.down();
+    await page.mouse.move(pair.a.x + 40, pair.a.y + 25, { steps: 8 });
+    // Measure while the pointer is still down: after release the node rejoins the layout
+    // and its links pull it back, by design.
+    await sleep(400);
+    const held = await page.evaluate(`(() => ({ a: window.__view.nodeScreenPosition(${pair.a.i}), b: window.__view.nodeScreenPosition(${pair.b.i}) }))()`);
+    await page.mouse.up();
+    check(
+      "dragging a node moves that node, not the camera",
+      Math.hypot(held.a.x - (pair.a.x + 40), held.a.y - (pair.a.y + 25)) < 20 && Math.hypot(held.b.x - pair.b.x, held.b.y - pair.b.y) < 20,
+      JSON.stringify({ dragged: [held.a.x - pair.a.x, held.a.y - pair.a.y], control: [held.b.x - pair.b.x, held.b.y - pair.b.y] }),
+    );
+    await sleep(400);
+
+    // rectangle tool: drag over the whole canvas selects nodes and reports it
+    await page.evaluate(`(() => { window.__sel = null; window.__view.on("selectionChange", (e) => { window.__sel = e; }); window.__view.setSelectionTool("rectangle"); })()`);
+    const box = await page.evaluate(`(() => { const r = document.querySelector("canvas").getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
+    await page.mouse.move(box.x + 4, box.y + 4);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.w - 4, box.y + box.h - 4, { steps: 6 });
+    await page.mouse.up();
+    await sleep(200);
+    const selected = await page.evaluate(`(() => window.__sel ? { n: window.__sel.nodes.length, links: window.__sel.linkCount } : null)()`);
+    check("rectangle tool selects nodes and emits selectionChange", selected !== null && selected.n > 0, JSON.stringify(selected));
+    await page.screenshot({ path: path.join(import.meta.dirname, "shot-selection.png") });
+
+    // a small selection: everything else is dimmed (look at shot-selection-single.png)
+    await page.evaluate(`window.__view.setSelection([${pair.a.i}])`);
+    await sleep(200);
+    await page.screenshot({ path: path.join(import.meta.dirname, "shot-selection-single.png") });
+
+    // back to no tool: clicking empty canvas clears the selection
+    await page.evaluate(`window.__view.setSelectionTool("none")`);
+    await page.mouse.click(box.x + 3, box.y + 3);
+    await sleep(150);
+    const cleared = await page.evaluate(`window.__view.getSelection().length`);
+    check("clicking empty canvas clears the selection", cleared === 0, String(cleared));
+
+    // pin node b, then let the layout run: it must not move
+    await page.evaluate(`window.__view.setPinnedNodes([${pair.b.i}])`);
+    await sleep(500); // the pin lands and the position snapshot catches up
+    const p0 = await page.evaluate(`window.__view.nodeScreenPosition(${pair.b.i})`);
+    await page.evaluate(`window.__view.reheat()`);
+    await sleep(1500);
+    const p1 = await page.evaluate(`window.__view.nodeScreenPosition(${pair.b.i})`);
+    check("a pinned node stays put while the layout runs", Math.hypot(p1.x - p0.x, p1.y - p0.y) < 1.5, `${(p1.x - p0.x).toFixed(2)}, ${(p1.y - p0.y).toFixed(2)}`);
+  }
+
+  const badIndices = await page.evaluate(`(() => { const r = []; for (const v of [[1e9], [1.5], [-1]]) { try { window.__view.setPinnedNodes(v); r.push("no error"); } catch (e) { r.push(e instanceof RangeError ? "RangeError" : "other: " + e.message); } } return r; })()`);
+  check("unknown or malformed node indices throw a RangeError", badIndices.every((r) => r === "RangeError"), JSON.stringify(badIndices));
+  await page.evaluate(`window.__view.setPinnedNodes([])`);
+
   // invalid data is rejected and does not break the view
   const bad = await page.evaluate(`(() => { try { window.__view.setData({ nodeCount: 2, edges: [0, 9] }); return "no error"; } catch (e) { return e.message; } })()`);
   check("invalid data throws a clear error", /invalid graph/i.test(bad), bad);

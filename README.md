@@ -32,6 +32,7 @@ A real one: 100,000 nodes and 305,000 links grouped into communities, drawn at 4
 - Pan, zoom to the cursor, hover and click on nodes, auto-fit camera.
 - Sharp on high-DPI screens (the drawing buffer follows `devicePixelRatio`).
 - `screenshot()` renders the current view offscreen and returns a PNG.
+- Drag nodes, pin nodes, and select nodes and links by click, rectangle or lasso; everything outside the selection is dimmed.
 - Large graphs stay fast: long links fade out by on-screen length, and the detail adapts to the frame rate.
 - Works with React, Next.js, Vue, Nuxt and Angular (see [Use it in your framework](#use-it-in-your-framework)), or with plain TypeScript.
 
@@ -66,6 +67,31 @@ view.destroy(); // releases the GPU; safe to call twice
 `create()` rejects with `WebGpuUnsupportedError` when the browser cannot run WebGPU, and with `WasmLoadError` when the engine file cannot be loaded. Invalid data makes `setData()` throw and keeps the previous graph.
 
 `await view.whenIdle()` resolves once the GPU has finished what was submitted so far (shaders compiled, graph uploaded, first frame drawn); on the development machine that took about 0.25 s for 100,000 nodes. `mountSociogram(...).ready` is the same wait after the view is created and the initial props are applied; it resolves `undefined` instead of rejecting when creation failed or the mount was destroyed. Use them to hide a loading state. They do not speed anything up: in 6 cold-start runs here (headless Chrome, Intel integrated GPU) the first seconds showed no multi-second stall either way, so the occasional stall seen earlier in a benchmark page is still unexplained.
+
+
+## Dragging, pinning and selection
+
+```ts
+const view = await SociogramView.create(canvas, {
+  dragNodes: true,          // default: dragging a node moves it, dragging empty space pans
+  clickSelection: "node",   // "node" (default) | "neighbours" | "none"
+  dragHeat: 0.3,            // layout temperature kept while dragging (0 to 1)
+  dimUnselected: true,      // default
+});
+
+view.setSelectionTool("rectangle"); // "rectangle" | "lasso" | "none" (default)
+view.setPinnedNodes([0, 5]);        // pinned nodes ignore the forces; [] unpins all
+view.setSelection([1, 2, 3]);       // also selects the links among them
+view.on("selectionChange", ({ nodes, linkCount }) => console.log(nodes.length, linkCount));
+view.on("nodeDragEnd", ({ index, x, y }) => console.log(index, x, y)); // world coordinates
+```
+
+- With a selection tool active, a drag draws a rectangle or a lasso instead of panning. Shift adds to the selection, Alt removes. A click on a node selects it (or it and its neighbours), a click on a link selects it with its two ends, a click on empty space clears the selection.
+- After release a dragged node rejoins the layout, so its links pull it back; pin it to keep it where it was dropped.
+- A selection with nothing in it still dims everything. `clearSelection()` removes the dimming.
+- Index lists are validated: an unknown, fractional or negative index throws a `RangeError` and changes nothing. New data (`setData`) clears pins and selection.
+- In the wrappers: `dragNodes`, `pinnedNodes` and `selectionTool` are props (keep the `pinnedNodes` array reference stable; a new array re-applies the pins), and `selectionChange`, `nodeDragStart`, `nodeDrag`, `nodeDragEnd` are events (`onSelectionChange` and so on in React, lower case on the Web Component). `dragHeat`, `clickSelection` and `dimUnselected` go in `options` and are read when the view is created.
+- Limits: picking and selection use a position snapshot that can lag the GPU by a few frames while the layout is running, so a node can jump slightly when a drag starts; "single" variants of area and link selection are not exposed; touch gestures (pinch) and keyboard selection are not implemented.
 
 ## Use it in your framework
 
@@ -191,7 +217,7 @@ Measured on one machine (integrated Intel UHD GPU, Windows 11, Chrome); expect d
 - A one-time stall of several seconds was seen at startup in the benchmark harness and is not yet explained.
 - Only Chrome and Edge on one GPU have been tested. Firefox, Safari, high-end GPUs and fractional display scaling (125%, 150%) are untested.
 - The framework examples were checked in headless Chrome on one machine, in development and production mode. Svelte, Solid and other frameworks can use the Web Component or `mountSociogram` (the lifecycle helper the wrappers are built on) but have no example.
-- Not implemented yet: dragging nodes, selection (box and lasso), labels, clusters, link arrows and curves, node shapes and images, timeline filters, 3D, and data loaders (CSV, Parquet, Arrow).
+- Not implemented yet: labels, clusters, link arrows and curves, node shapes and images, timeline filters, 3D, and data loaders (CSV, Parquet, Arrow).
 
 ## Contributing
 

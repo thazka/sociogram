@@ -5,6 +5,6 @@ mod renderer;
 pub mod testing;
 
 pub use context::{GpuContext, GpuError};
-pub use instances::{instances_from_graph, LinkInstance, NodeInstance};
+pub use instances::{edge_instance_map, instances_from_graph, LinkInstance, NodeInstance};
 pub use layout::{GpuLayout, MAX_GPU_NODES};
-pub use renderer::Renderer;
+pub use renderer::{Renderer, DIM_LINK_ALPHA, DIM_NODE_ALPHA};

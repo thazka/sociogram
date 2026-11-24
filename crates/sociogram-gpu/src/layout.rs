@@ -17,6 +17,7 @@ struct Params {
     counts: [u32; 4],
     a: [f32; 4],
     b: [f32; 4],
+    held: [f32; 4],
 }
 
 /// Force-directed layout running on the GPU. Positions are double buffered:
@@ -36,6 +37,11 @@ pub struct GpuLayout {
     step: wgpu::ComputePipeline,
     /// Index into `positions` of the buffer holding the latest positions.
     current: usize,
+    /// One word per node (0 or 1): pinned nodes ignore the forces.
+    pinned: wgpu::Buffer,
+    /// A node held at a world position (a drag), with the heat floor kept while held.
+    held: Option<(u32, [f32; 2])>,
+    heat_floor: f32,
 }
 
 fn storage_init(
@@ -101,6 +107,7 @@ impl GpuLayout {
                 bgl_entry(3, Storage { read_only: false }),
                 bgl_entry(4, Storage { read_only: true }),
                 bgl_entry(5, Storage { read_only: true }),
+                bgl_entry(6, Storage { read_only: true }),
             ],
         });
         // The cell buffer is bound twice: atomics for accumulate (group 1) and
@@ -174,6 +181,13 @@ impl GpuLayout {
             wgpu::BufferUsages::empty(),
         );
 
+        let pinned = storage_init(
+            device,
+            "pinned flags",
+            &vec![0u8; n * std::mem::size_of::<u32>()],
+            wgpu::BufferUsages::COPY_DST,
+        );
+
         let bind = |pos_in: &wgpu::Buffer, pos_out: &wgpu::Buffer| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("sociogram layout bind"),
@@ -202,6 +216,10 @@ impl GpuLayout {
                     wgpu::BindGroupEntry {
                         binding: 5,
                         resource: neighbors.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: pinned.as_entire_binding(),
                     },
                 ],
             })
@@ -236,6 +254,9 @@ impl GpuLayout {
             accumulate,
             step,
             current: 0,
+            pinned,
+            held: None,
+            heat_floor: 0.0,
         })
     }
 
@@ -244,7 +265,7 @@ impl GpuLayout {
     }
 
     pub fn is_settled(&self) -> bool {
-        self.alpha < self.config.base.alpha_min
+        self.held.is_none() && self.alpha < self.config.base.alpha_min
     }
 
     pub fn node_count(&self) -> usize {
@@ -262,10 +283,12 @@ impl GpuLayout {
     pub fn step(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let c = self.config.base;
         if self.node_count > 0 {
+            let (held_index, held_xy) = self.held.unwrap_or((u32::MAX, [0.0; 2]));
             let params = Params {
-                counts: [self.node_count, self.config.grid_dim, 0, 0],
+                counts: [self.node_count, self.config.grid_dim, held_index, 0],
                 a: [c.gravity, c.repulsion, c.link_spring, c.link_distance],
                 b: [c.friction, self.alpha, self.config.space_half, 0.0],
+                held: [held_xy[0], held_xy[1], 0.0, 0.0],
             };
             queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
 
@@ -299,6 +322,10 @@ impl GpuLayout {
             self.current = 1 - self.current;
         }
         self.alpha *= 1.0 - c.alpha_decay;
+        if self.held.is_some() {
+            // While a node is held the layout stays warm (a floor under alpha).
+            self.alpha = self.alpha.max(self.heat_floor);
+        }
     }
 
     /// Block until the GPU is idle and copy the latest positions back.
@@ -336,5 +363,59 @@ impl GpuLayout {
     /// after the data or the settings changed).
     pub fn reheat(&mut self) {
         self.alpha = 1.0;
+    }
+
+    /// Pin exactly these nodes (an empty slice unpins everything). Pinned nodes
+    /// do not move from the forces but still push and pull the others.
+    pub fn set_pinned(&mut self, queue: &wgpu::Queue, indices: &[u32]) -> Result<(), GpuError> {
+        if let Some(&bad) = indices.iter().find(|&&i| i >= self.node_count) {
+            return Err(GpuError::InvalidInput(format!(
+                "pinned node {bad} is out of range ({} nodes)",
+                self.node_count
+            )));
+        }
+        if self.node_count == 0 {
+            return Ok(());
+        }
+        let mut flags = vec![0u32; self.node_count as usize];
+        for &i in indices {
+            flags[i as usize] = 1;
+        }
+        queue.write_buffer(&self.pinned, 0, bytemuck::cast_slice(&flags));
+        Ok(())
+    }
+
+    /// Hold one node at `world` (a drag). Alpha is raised to at least `heat`
+    /// (0..=1) and kept there until [`GpuLayout::release`], so the layout
+    /// around the node reacts. Call again on every pointer move.
+    pub fn hold(&mut self, index: u32, world: [f32; 2], heat: f32) -> Result<(), GpuError> {
+        if index >= self.node_count {
+            return Err(GpuError::InvalidInput(format!(
+                "held node {index} is out of range ({} nodes)",
+                self.node_count
+            )));
+        }
+        if !(world[0].is_finite() && world[1].is_finite()) {
+            return Err(GpuError::InvalidInput("held position is not finite".into()));
+        }
+        if !(0.0..=1.0).contains(&heat) {
+            return Err(GpuError::InvalidInput(format!(
+                "drag heat {heat} is not in 0..=1"
+            )));
+        }
+        self.held = Some((index, world));
+        self.heat_floor = heat;
+        self.alpha = self.alpha.max(heat);
+        Ok(())
+    }
+
+    /// End a hold: the node obeys the forces again (unless it is pinned).
+    pub fn release(&mut self) {
+        self.held = None;
+        self.heat_floor = 0.0;
+    }
+
+    pub fn has_hold(&self) -> bool {
+        self.held.is_some()
     }
 }

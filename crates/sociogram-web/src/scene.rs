@@ -1,10 +1,15 @@
-use sociogram_core::{Camera, Graph, GraphData, GraphError, GridLayoutConfig, PickIndex};
+use sociogram_core::{
+    Camera, Graph, GraphData, GraphError, GridLayoutConfig, PickIndex, SelectionError,
+};
 use sociogram_gpu::{instances_from_graph, GpuError, GpuLayout, Renderer};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod capture;
+mod interaction;
+
+pub use interaction::{SelectHit, SelectionSummary, MAX_INDEX_LIST, MAX_POLYGON_VERTICES};
 
 use crate::lod::{adapt_lod, auto_space_half, LinkFade, LINK_FADE_AUTO_MIN_LINKS};
 use capture::CaptureJob;
@@ -52,6 +57,7 @@ impl Default for SceneOptions {
 pub enum SceneError {
     Graph(GraphError),
     Gpu(GpuError),
+    Selection(SelectionError),
 }
 
 impl fmt::Display for SceneError {
@@ -59,7 +65,14 @@ impl fmt::Display for SceneError {
         match self {
             SceneError::Graph(e) => write!(f, "invalid graph: {e}"),
             SceneError::Gpu(e) => write!(f, "{e}"),
+            SceneError::Selection(e) => write!(f, "{e}"),
         }
+    }
+}
+
+impl From<SelectionError> for SceneError {
+    fn from(e: SelectionError) -> Self {
+        SceneError::Selection(e)
     }
 }
 
@@ -110,6 +123,9 @@ pub struct Scene {
     /// Set by the GPU when everything submitted before `request_idle` has finished.
     idle_done: Arc<AtomicBool>,
     idle_waiting: bool,
+    /// The validated graph, kept for selection (edges and neighbours).
+    graph: Option<Graph>,
+    interaction: interaction::InteractionState,
 }
 
 fn bounds(points: &[[f32; 2]]) -> Option<([f32; 2], [f32; 2])> {
@@ -150,6 +166,8 @@ impl Scene {
             layout_busy: Arc::new(AtomicBool::new(false)),
             idle_done: Arc::new(AtomicBool::new(false)),
             idle_waiting: false,
+            graph: None,
+            interaction: Default::default(),
         }
     }
 
@@ -171,6 +189,8 @@ impl Scene {
         if graph.node_count() == 0 {
             self.layout = None;
             self.link_count = 0;
+            self.graph = None;
+            self.reset_interaction(0, 0);
             self.renderer.set_nodes(device, &[]);
             self.renderer.set_links(device, &[]);
             self.reset_snapshot(Vec::new(), 0.0);
@@ -196,6 +216,9 @@ impl Scene {
             .set_positions(device, layout.positions_buffer());
         let max_size = graph.sizes().iter().copied().fold(0.0, f32::max);
         self.reset_snapshot(graph.positions().to_vec(), max_size);
+        self.reset_interaction(graph.node_count(), graph.edge_count());
+        self.interaction.edge_instance = sociogram_gpu::edge_instance_map(&graph);
+        self.graph = Some(graph);
         self.layout = Some(layout);
         Ok(())
     }

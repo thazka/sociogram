@@ -48,6 +48,24 @@ pub fn instances_from_graph(
     (nodes, links)
 }
 
+/// For each edge of the graph, the index of its link instance, or `u32::MAX`
+/// for a self-loop (those are not drawn).
+pub fn edge_instance_map(graph: &Graph) -> Vec<u32> {
+    let mut next = 0u32;
+    graph
+        .edges()
+        .iter()
+        .map(|e| {
+            if e[0] == e[1] {
+                u32::MAX
+            } else {
+                next += 1;
+                next - 1
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +94,19 @@ mod tests {
         assert_eq!(nodes[2].size, 3.0);
         assert_eq!((links[1].src, links[1].dst), (1, 2));
         assert_eq!(links[0].width, 2.0);
+    }
+
+    #[test]
+    fn edge_instance_map_skips_self_loops_and_keeps_order() {
+        let g = Graph::new(GraphData {
+            node_count: 3,
+            edges: vec![[0, 1], [1, 1], [1, 2]],
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(edge_instance_map(&g), vec![0, u32::MAX, 1]);
+        let (_, links) = instances_from_graph(&g, [1.0; 4], 1.0);
+        assert_eq!(links.len(), 2, "the map agrees with the instance list");
     }
 
     #[test]

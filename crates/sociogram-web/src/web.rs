@@ -4,7 +4,8 @@
 
 use crate::lod::LinkFade;
 use crate::scene::{Scene, SceneOptions};
-use sociogram_core::GraphData;
+use crate::SelectHit;
+use sociogram_core::{GraphData, SelectOp};
 use sociogram_gpu::GpuContext;
 use std::fmt::Display;
 use wasm_bindgen::prelude::*;
@@ -318,5 +319,163 @@ impl Sociogram {
                 height: c.height,
                 rgba: c.rgba,
             }))
+    }
+}
+
+/// Selection operation codes shared with the TypeScript layer.
+fn op_from(code: u8) -> Result<SelectOp, JsError> {
+    match code {
+        0 => Ok(SelectOp::Replace),
+        1 => Ok(SelectOp::Add),
+        2 => Ok(SelectOp::Remove),
+        other => Err(JsError::new(&format!(
+            "unknown selection operation {other}"
+        ))),
+    }
+}
+
+// Dragging, pinning and selection. Input validation (non-finite numbers,
+// oversized lists, unknown indices) lives in `Scene`, so every method here is
+// already safe against bad input; do not duplicate the checks.
+#[wasm_bindgen]
+impl Sociogram {
+    /// Start dragging the node under the pointer (physical pixels): its index, or -1.
+    pub fn begin_drag(&mut self, x: f32, y: f32) -> Result<i32, JsError> {
+        Ok(self
+            .inner_mut()?
+            .scene
+            .begin_drag(x, y)
+            .map_or(-1, |i| i as i32))
+    }
+
+    pub fn drag_to(&mut self, x: f32, y: f32) -> Result<(), JsError> {
+        self.inner_mut()?.scene.drag_to(x, y);
+        Ok(())
+    }
+
+    pub fn end_drag(&mut self) -> Result<(), JsError> {
+        self.inner_mut()?.scene.end_drag();
+        Ok(())
+    }
+
+    /// Layout temperature (0..=1) kept while a node is dragged.
+    pub fn set_drag_heat(&mut self, heat: f32) -> Result<(), JsError> {
+        self.inner_mut()?
+            .scene
+            .set_drag_heat(heat)
+            .map_err(js_error)
+    }
+
+    /// Pin exactly these nodes; an empty list unpins all.
+    pub fn set_pinned(&mut self, indices: &[u32]) -> Result<(), JsError> {
+        let inner = self.inner_mut()?;
+        inner
+            .scene
+            .set_pinned(&inner.ctx.queue, indices)
+            .map_err(js_error)
+    }
+
+    pub fn pinned(&mut self) -> Result<Vec<u32>, JsError> {
+        Ok(self.inner_mut()?.scene.pinned().to_vec())
+    }
+
+    /// `op`: 0 replace, 1 add, 2 remove.
+    pub fn select_nodes(&mut self, indices: &[u32], op: u8) -> Result<(), JsError> {
+        let op = op_from(op)?;
+        let inner = self.inner_mut()?;
+        inner
+            .scene
+            .select_nodes(&inner.ctx.device, &inner.ctx.queue, indices, op)
+            .map(|_| ())
+            .map_err(js_error)
+    }
+
+    pub fn select_rect(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        op: u8,
+    ) -> Result<(), JsError> {
+        let op = op_from(op)?;
+        let inner = self.inner_mut()?;
+        inner
+            .scene
+            .select_in_rect(&inner.ctx.device, &inner.ctx.queue, [x0, y0], [x1, y1], op)
+            .map(|_| ())
+            .map_err(js_error)
+    }
+
+    /// `xy` is flat `x, y, x, y, ...` in physical pixels.
+    pub fn select_polygon(&mut self, xy: &[f32], op: u8) -> Result<(), JsError> {
+        if !xy.len().is_multiple_of(2) {
+            return Err(JsError::new(
+                "polygon needs x, y pairs (odd number of values)",
+            ));
+        }
+        let op = op_from(op)?;
+        let polygon: Vec<[f32; 2]> = xy.as_chunks::<2>().0.to_vec();
+        let inner = self.inner_mut()?;
+        inner
+            .scene
+            .select_in_polygon(&inner.ctx.device, &inner.ctx.queue, &polygon, op)
+            .map(|_| ())
+            .map_err(js_error)
+    }
+
+    /// Select what is under the pointer. Returns 0 = nothing, 1 = a node, 2 = a link.
+    pub fn select_at(&mut self, x: f32, y: f32, neighbours: bool, op: u8) -> Result<u8, JsError> {
+        let op = op_from(op)?;
+        let inner = self.inner_mut()?;
+        let hit = inner
+            .scene
+            .select_at(&inner.ctx.device, &inner.ctx.queue, x, y, neighbours, op)
+            .map_err(js_error)?;
+        Ok(match hit {
+            SelectHit::None => 0,
+            SelectHit::Node(_) => 1,
+            SelectHit::Link(_) => 2,
+        })
+    }
+
+    pub fn clear_selection(&mut self) -> Result<(), JsError> {
+        let inner = self.inner_mut()?;
+        inner.scene.clear_selection(&inner.ctx.queue);
+        Ok(())
+    }
+
+    pub fn selection_active(&mut self) -> Result<bool, JsError> {
+        Ok(self.inner_mut()?.scene.selection().is_active())
+    }
+
+    pub fn selected_nodes(&mut self) -> Result<Vec<u32>, JsError> {
+        Ok(self.inner_mut()?.scene.selection().selected_nodes())
+    }
+
+    pub fn selected_link_count(&mut self) -> Result<u32, JsError> {
+        Ok(self.inner_mut()?.scene.selection().link_count_selected() as u32)
+    }
+
+    /// Dim everything outside the selection (default) or draw it normally.
+    pub fn set_dim_unselected(&mut self, on: bool) -> Result<(), JsError> {
+        let inner = self.inner_mut()?;
+        inner.scene.set_dim_unselected(&inner.ctx.queue, on);
+        Ok(())
+    }
+
+    /// World position under a physical-pixel screen position, as `[x, y]`.
+    pub fn screen_to_world(&mut self, x: f32, y: f32) -> Result<Vec<f32>, JsError> {
+        let w = self.inner_mut()?.scene.camera().screen_to_world([x, y]);
+        Ok(vec![w[0], w[1]])
+    }
+
+    /// Physical-pixel position of a node, or an empty array for an unknown index.
+    pub fn node_screen_position(&mut self, index: u32) -> Result<Vec<f32>, JsError> {
+        Ok(self
+            .inner_mut()?
+            .scene
+            .node_screen_position(index as usize)
+            .map_or_else(Vec::new, |p| vec![p[0], p[1]]))
     }
 }

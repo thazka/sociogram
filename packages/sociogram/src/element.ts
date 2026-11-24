@@ -10,13 +10,23 @@
 //
 // Events (all `CustomEvent`): `ready` (detail: the view), `nodehover` (detail:
 // index or null), `nodeclick` (detail: index), `error` (detail: `{ error, phase }`).
+// Also `nodedragstart`, `nodedrag`, `nodedragend` (detail: `{ index, x, y }`, world
+// coordinates) and `selectionchange` (detail: `{ nodes, linkCount }`).
 //
 // The class is created inside `defineSociogramElement` because `HTMLElement` does
 // not exist on the server: importing this module is safe during server rendering.
 
 import { mountSociogram } from "./mount.js";
 import type { Mounted, MountErrorPhase } from "./mount.js";
-import type { GraphData, LinkFadeMode, SociogramOptions, SociogramView } from "./view.js";
+import type { SelectionTool } from "./pointer.js";
+import type {
+  GraphData,
+  LinkFadeMode,
+  NodeDragEvent,
+  SelectionChange,
+  SociogramOptions,
+  SociogramView,
+} from "./view.js";
 
 export interface SociogramErrorDetail {
   error: Error;
@@ -31,6 +41,12 @@ export interface SociogramElementEventMap {
   nodehover: CustomEvent<number | null>;
   /** A node was clicked (not dragged). */
   nodeclick: CustomEvent<number>;
+  /** A node drag started, moved or ended (world coordinates). */
+  nodedragstart: CustomEvent<NodeDragEvent>;
+  nodedrag: CustomEvent<NodeDragEvent>;
+  nodedragend: CustomEvent<NodeDragEvent>;
+  /** The selection changed through the pointer or the API. */
+  selectionchange: CustomEvent<SelectionChange>;
   /** Creating the view failed, data was rejected, or rendering stopped. `phase` tells which. */
   error: CustomEvent<SociogramErrorDetail>;
 }
@@ -42,6 +58,12 @@ export interface SociogramElement extends HTMLElement {
   /** The graph. Assign a new object to replace it. */
   data: GraphData | undefined;
   linkFade: LinkFadeMode | undefined;
+  /** Drag nodes with the pointer. Default `true`. */
+  dragNodes: boolean | undefined;
+  /** Indices of pinned nodes. */
+  pinnedNodes: ArrayLike<number> | undefined;
+  /** Rectangle or lasso selection tool; `"none"` (default) leaves the pointer for dragging and panning. */
+  selectionTool: SelectionTool | undefined;
   /** Create-time options. Set before the element is connected, or reconnect it. */
   options: SociogramOptions | undefined;
   /** The underlying view once ready, otherwise `undefined`. */
@@ -85,7 +107,7 @@ declare global {
   }
 }
 
-const UPGRADE_PROPERTIES = ["data", "linkFade", "options"] as const;
+const UPGRADE_PROPERTIES = ["data", "linkFade", "dragNodes", "pinnedNodes", "selectionTool", "options"] as const;
 
 /**
  * Register the element (once; later calls return the existing class). Call it
@@ -103,6 +125,9 @@ export function defineSociogramElement(tagName = "sociogram-view"): CustomElemen
     #host: HTMLDivElement | undefined;
     #data: GraphData | undefined;
     #linkFade: LinkFadeMode | undefined;
+    #dragNodes: boolean | undefined;
+    #pinnedNodes: ArrayLike<number> | undefined;
+    #selectionTool: SelectionTool | undefined;
     #options: SociogramOptions | undefined;
 
     get data(): GraphData | undefined {
@@ -119,6 +144,30 @@ export function defineSociogramElement(tagName = "sociogram-view"): CustomElemen
     set linkFade(value: LinkFadeMode | undefined) {
       this.#linkFade = value;
       this.#mounted?.update({ linkFade: value });
+    }
+
+    get dragNodes(): boolean | undefined {
+      return this.#dragNodes;
+    }
+    set dragNodes(value: boolean | undefined) {
+      this.#dragNodes = value;
+      this.#mounted?.update({ dragNodes: value });
+    }
+
+    get pinnedNodes(): ArrayLike<number> | undefined {
+      return this.#pinnedNodes;
+    }
+    set pinnedNodes(value: ArrayLike<number> | undefined) {
+      this.#pinnedNodes = value;
+      this.#mounted?.update({ pinnedNodes: value });
+    }
+
+    get selectionTool(): SelectionTool | undefined {
+      return this.#selectionTool;
+    }
+    set selectionTool(value: SelectionTool | undefined) {
+      this.#selectionTool = value;
+      this.#mounted?.update({ selectionTool: value });
     }
 
     get options(): SociogramOptions | undefined {
@@ -156,11 +205,21 @@ export function defineSociogramElement(tagName = "sociogram-view"): CustomElemen
       }
       this.#mounted = mountSociogram(this.#host, {
         options: this.#options,
-        initial: { data: this.#data, linkFade: this.#linkFade },
+        initial: {
+          data: this.#data,
+          linkFade: this.#linkFade,
+          dragNodes: this.#dragNodes,
+          pinnedNodes: this.#pinnedNodes,
+          selectionTool: this.#selectionTool,
+        },
         callbacks: () => ({
           onReady: (view) => this.#emit("ready", view),
           onNodeHover: (index) => this.#emit("nodehover", index),
           onNodeClick: (index) => this.#emit("nodeclick", index),
+          onNodeDragStart: (e) => this.#emit("nodedragstart", e),
+          onNodeDrag: (e) => this.#emit("nodedrag", e),
+          onNodeDragEnd: (e) => this.#emit("nodedragend", e),
+          onSelectionChange: (e) => this.#emit("selectionchange", e),
           onError: (error, phase) => this.#emit<SociogramErrorDetail>("error", { error, phase }),
         }),
       });

@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sociogram selection probe</title>
+<style>html,body{margin:0;background:#000}#c{width:800px;height:600px;display:block}</style>
+<canvas id="c"></canvas>
+<script type="module">
+// Selection timing at 100,000 nodes: how long setSelection / setPinnedNodes take,
+// and whether frame pacing changes while a large selection is drawn.
+const n = 100000;
+const out = {};
+let last = performance.now();
+let maxGap = 0;
+let frames = 0;
+let measuring = false;
+const tick = (now) => {
+  if (measuring) { maxGap = Math.max(maxGap, now - last); frames++; }
+  last = now;
+  requestAnimationFrame(tick);
+};
+requestAnimationFrame(tick);
+try {
+  const { SociogramView } = await import("/packages/sociogram/dist/view.js");
+  const view = await SociogramView.create(document.getElementById("c"), {});
+  let seed = 1;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const edges = new Uint32Array(n * 5 * 2);
+  for (let i = 0; i < n * 5; i++) { edges[i * 2] = Math.floor(i / 5); edges[i * 2 + 1] = Math.floor(rnd() * n); }
+  view.setData({ nodeCount: n, edges });
+  await view.whenIdle();
+  await new Promise((r) => setTimeout(r, 3000)); // let the layout settle a little
+  const sample = async (label) => {
+    maxGap = 0; frames = 0; measuring = true;
+    await new Promise((r) => setTimeout(r, 2000));
+    measuring = false;
+    out[label] = { fps: Math.round(frames / 2), maxFrameGapMs: Math.round(maxGap) };
+  };
+  await sample("noSelection");
+  const half = Array.from({ length: n / 2 }, (_, i) => i);
+  const t0 = performance.now();
+  view.setSelection(half);
+  out.setSelectionMs = Math.round(performance.now() - t0);
+  await sample("with50kSelected");
+  const t1 = performance.now();
+  view.setPinnedNodes(half);
+  out.pin50kMs = Math.round(performance.now() - t1);
+  window.__log = out;
+  window.__ready = true;
+} catch (e) {
+  window.__error = `${e.name}: ${e.message}`;
+}
+</script>

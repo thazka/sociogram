@@ -4,6 +4,14 @@ struct Camera { view: vec4<f32>, viewport: vec4<f32> };
 // World positions of all nodes, written by the layout (or uploaded by the CPU).
 @group(1) @binding(0) var<storage, read> positions: array<vec2<f32>>;
 
+// Selection state. One word per node and per link instance (0 or 1).
+// dim.v.x = 1 while a selection is active; dim.v.y and dim.v.z are the alpha
+// multipliers for unselected nodes and links.
+@group(2) @binding(0) var<storage, read> node_flags: array<u32>;
+@group(2) @binding(1) var<storage, read> link_flags: array<u32>;
+struct Dim { v: vec4<f32> };
+@group(2) @binding(2) var<uniform> dim: Dim;
+
 fn to_ndc(world: vec2<f32>) -> vec2<f32> {
     let px = (world - cam.view.xy) * cam.view.z;
     return px / (cam.viewport.xy * 0.5);
@@ -36,7 +44,11 @@ fn vs_node(
     var o: NodeOut;
     o.clip = vec4<f32>(ndc, 0.0, 1.0);
     o.uv = c;
-    o.color = inst.color;
+    var a = inst.color.a;
+    if (dim.v.x > 0.5 && node_flags[ii] == 0u) {
+        a = a * dim.v.y;
+    }
+    o.color = vec4<f32>(inst.color.rgb, a);
     o.radius_px = radius_px;
     return o;
 }
@@ -61,7 +73,11 @@ struct LinkOut {
 };
 
 @vertex
-fn vs_link(@builtin(vertex_index) vi: u32, inst: LinkIn) -> LinkOut {
+fn vs_link(
+    @builtin(vertex_index) vi: u32,
+    @builtin(instance_index) ii: u32,
+    inst: LinkIn,
+) -> LinkOut {
     let c = CORNERS[vi];
     let t = c.x * 0.5 + 0.5;
     let side = c.y;
@@ -86,7 +102,11 @@ fn vs_link(@builtin(vertex_index) vi: u32, inst: LinkIn) -> LinkOut {
         return o;
     }
     o.clip = vec4<f32>(px / (cam.viewport.xy * 0.5), 0.0, 1.0);
-    o.color = vec4<f32>(inst.color.rgb, inst.color.a * visibility);
+    var shade = 1.0;
+    if (dim.v.x > 0.5 && link_flags[ii] == 0u) {
+        shade = dim.v.z;
+    }
+    o.color = vec4<f32>(inst.color.rgb, inst.color.a * visibility * shade);
     return o;
 }
 

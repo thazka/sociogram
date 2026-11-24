@@ -194,3 +194,168 @@ fn rejects_too_many_nodes_and_bad_settings() {
         ));
     }
 }
+
+fn two_nodes_30_apart() -> Graph {
+    Graph::new(GraphData {
+        node_count: 2,
+        edges: vec![[0, 1]],
+        positions: Some(vec![[0.0, 0.0], [30.0, 0.0]]),
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_held_node_follows_its_target_and_its_neighbour_reacts() {
+    let Some(ctx) = context() else { return };
+    let mut gpu = GpuLayout::new(&ctx.device, &two_nodes_30_apart(), pure(0.1, 0.0, 0.0)).unwrap();
+    gpu.hold(0, [100.0, 0.0], 0.0).unwrap();
+    for _ in 0..500 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    let p = gpu.read_positions(&ctx.device, &ctx.queue);
+    assert!(
+        dist(p[0], [100.0, 0.0]) < 1e-3,
+        "held node is at the target, got {:?}",
+        p[0]
+    );
+    assert!(
+        (dist(p[0], p[1]) - 30.0).abs() < 0.05,
+        "neighbour settled at link distance"
+    );
+}
+
+#[test]
+fn a_released_node_obeys_physics_again() {
+    let Some(ctx) = context() else { return };
+    let mut gpu = GpuLayout::new(&ctx.device, &two_nodes_30_apart(), pure(0.1, 0.0, 0.0)).unwrap();
+    gpu.hold(0, [100.0, 0.0], 0.0).unwrap();
+    for _ in 0..5 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    gpu.release();
+    assert!(!gpu.has_hold());
+    for _ in 0..20 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    let p = gpu.read_positions(&ctx.device, &ctx.queue);
+    assert!(
+        p[0][0] < 99.0,
+        "the spring pulls the released node back, got {:?}",
+        p[0]
+    );
+}
+
+#[test]
+fn a_pinned_node_stays_put_while_free_nodes_and_neighbours_move() {
+    let Some(ctx) = context() else { return };
+    let graph = Graph::new(GraphData {
+        node_count: 3,
+        edges: vec![[0, 1], [1, 2]],
+        positions: Some(vec![[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut gpu = GpuLayout::new(&ctx.device, &graph, pure(0.1, 0.0, 0.0)).unwrap();
+    gpu.set_pinned(&ctx.queue, &[0]).unwrap();
+    for _ in 0..500 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    let p = gpu.read_positions(&ctx.device, &ctx.queue);
+    assert_eq!(p[0], [0.0, 0.0], "pinned node did not move at all");
+    assert!(
+        (dist(p[0], p[1]) - 30.0).abs() < 0.1,
+        "free neighbour moved to link distance"
+    );
+    assert!((dist(p[1], p[2]) - 30.0).abs() < 0.1);
+}
+
+#[test]
+fn a_pinned_node_that_is_dragged_stays_where_it_is_dropped() {
+    let Some(ctx) = context() else { return };
+    let mut gpu = GpuLayout::new(&ctx.device, &two_nodes_30_apart(), pure(0.1, 0.0, 0.0)).unwrap();
+    gpu.set_pinned(&ctx.queue, &[0]).unwrap();
+    gpu.hold(0, [50.0, 0.0], 0.0).unwrap();
+    for _ in 0..20 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    gpu.release();
+    for _ in 0..50 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    let p = gpu.read_positions(&ctx.device, &ctx.queue);
+    assert!(
+        dist(p[0], [50.0, 0.0]) < 1e-3,
+        "dropped at the drag target, got {:?}",
+        p[0]
+    );
+}
+
+#[test]
+fn unpinning_lets_the_node_move_again() {
+    let Some(ctx) = context() else { return };
+    let mut gpu = GpuLayout::new(&ctx.device, &two_nodes_30_apart(), pure(0.1, 0.0, 0.0)).unwrap();
+    gpu.set_pinned(&ctx.queue, &[0, 1]).unwrap();
+    gpu.set_pinned(&ctx.queue, &[]).unwrap();
+    // Link distance is 30 and the nodes start 30 apart, so push one away first.
+    gpu.hold(1, [200.0, 0.0], 0.0).unwrap();
+    for _ in 0..5 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    gpu.release();
+    for _ in 0..20 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    let p = gpu.read_positions(&ctx.device, &ctx.queue);
+    assert!(
+        p[0][0] > 1.0,
+        "the unpinned node 0 was pulled toward node 1, got {:?}",
+        p[0]
+    );
+}
+
+#[test]
+fn bad_hold_and_pin_input_is_an_error() {
+    let Some(ctx) = context() else { return };
+    let mut gpu = GpuLayout::new(&ctx.device, &two_nodes_30_apart(), pure(0.1, 0.0, 0.0)).unwrap();
+    assert!(matches!(
+        gpu.hold(2, [0.0, 0.0], 0.3),
+        Err(GpuError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        gpu.hold(0, [f32::NAN, 0.0], 0.3),
+        Err(GpuError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        gpu.hold(0, [0.0, 0.0], 1.5),
+        Err(GpuError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        gpu.set_pinned(&ctx.queue, &[0, 2]),
+        Err(GpuError::InvalidInput(_))
+    ));
+    assert!(!gpu.has_hold(), "a rejected hold leaves nothing held");
+}
+
+#[test]
+fn a_hold_keeps_the_layout_awake_even_when_it_would_have_cooled_down() {
+    let Some(ctx) = context() else { return };
+    let mut config = pure(0.1, 0.0, 0.0);
+    config.base.alpha_decay = 0.5; // alpha falls below alpha_min within 30 steps
+    let mut gpu = GpuLayout::new(&ctx.device, &two_nodes_30_apart(), config).unwrap();
+    for _ in 0..30 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    assert!(gpu.is_settled(), "without a hold the layout cools down");
+    gpu.hold(0, [10.0, 0.0], 0.0).unwrap();
+    assert!(!gpu.is_settled(), "a hold wakes it up");
+    for _ in 0..30 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    assert!(!gpu.is_settled(), "and keeps it awake while held");
+    gpu.release();
+    for _ in 0..30 {
+        gpu.step(&ctx.device, &ctx.queue);
+    }
+    assert!(gpu.is_settled(), "after release it cools down again");
+}

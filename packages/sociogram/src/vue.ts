@@ -14,7 +14,15 @@ import { defineComponent, h, onBeforeUnmount, onMounted, shallowRef, toRaw, watc
 import type { PropType } from "vue";
 import { mountSociogram } from "./mount.js";
 import type { Mounted, MountErrorPhase } from "./mount.js";
-import type { GraphData, LinkFadeMode, SociogramOptions, SociogramView } from "./view.js";
+import type { SelectionTool } from "./pointer.js";
+import type {
+  GraphData,
+  LinkFadeMode,
+  NodeDragEvent,
+  SelectionChange,
+  SociogramOptions,
+  SociogramView,
+} from "./view.js";
 
 /** What a template `ref` to the component exposes (type it as `ref<SociogramHandle | null>`). */
 export interface SociogramHandle {
@@ -34,6 +42,10 @@ export const Sociogram = defineComponent({
     /** The graph. Pass a new object to replace it; the same object is applied once. */
     data: { type: Object as PropType<GraphData>, default: undefined },
     linkFade: { type: [String, Object] as PropType<LinkFadeMode>, default: undefined },
+    dragNodes: { type: Boolean, default: undefined },
+    /** Keep the array reference stable: a new array re-applies the pins. */
+    pinnedNodes: { type: [Array, Object] as PropType<ArrayLike<number>>, default: undefined },
+    selectionTool: { type: String as PropType<SelectionTool>, default: undefined },
     /** Create-time options. Changing `wasmUrl` or `maxPixelRatio` remounts the view. */
     options: { type: Object as PropType<SociogramOptions>, default: undefined },
   },
@@ -42,6 +54,10 @@ export const Sociogram = defineComponent({
     error: (_error: Error, _phase: MountErrorPhase) => true,
     nodeHover: (_index: number | null) => true,
     nodeClick: (_index: number) => true,
+    nodeDragStart: (_e: NodeDragEvent) => true,
+    nodeDrag: (_e: NodeDragEvent) => true,
+    nodeDragEnd: (_e: NodeDragEvent) => true,
+    selectionChange: (_e: SelectionChange) => true,
   },
   setup(props, { emit, expose, slots }) {
     const host = shallowRef<HTMLElement | null>(null);
@@ -57,13 +73,28 @@ export const Sociogram = defineComponent({
       const maxPixelRatio = props.options?.maxPixelRatio;
       if (wasmUrl !== undefined) options.wasmUrl = wasmUrl;
       if (maxPixelRatio !== undefined) options.maxPixelRatio = maxPixelRatio;
+      // Create-time only: changing these later does not remount the view.
+      const given = props.options;
+      if (given?.dragHeat !== undefined) options.dragHeat = given.dragHeat;
+      if (given?.clickSelection !== undefined) options.clickSelection = given.clickSelection;
+      if (given?.dimUnselected !== undefined) options.dimUnselected = given.dimUnselected;
       mounted = mountSociogram(element, {
         options,
-        initial: { data: raw(props.data), linkFade: raw(props.linkFade) },
+        initial: {
+          data: raw(props.data),
+          linkFade: raw(props.linkFade),
+          dragNodes: props.dragNodes,
+          pinnedNodes: raw(props.pinnedNodes),
+          selectionTool: props.selectionTool,
+        },
         callbacks: () => ({
           onReady: (view) => emit("ready", view),
           onNodeHover: (i) => emit("nodeHover", i),
           onNodeClick: (i) => emit("nodeClick", i),
+          onNodeDragStart: (e) => emit("nodeDragStart", e),
+          onNodeDrag: (e) => emit("nodeDrag", e),
+          onNodeDragEnd: (e) => emit("nodeDragEnd", e),
+          onSelectionChange: (e) => emit("selectionChange", e),
           onError: (error, phase) => {
             if (phase === "create") failure.value = error;
             emit("error", error, phase);
@@ -86,6 +117,18 @@ export const Sociogram = defineComponent({
     watch(
       () => props.linkFade,
       (linkFade) => mounted?.update({ linkFade: raw(linkFade) }),
+    );
+    watch(
+      () => props.dragNodes,
+      (dragNodes) => mounted?.update({ dragNodes }),
+    );
+    watch(
+      () => props.pinnedNodes,
+      (pinnedNodes) => mounted?.update({ pinnedNodes: raw(pinnedNodes) }),
+    );
+    watch(
+      () => props.selectionTool,
+      (selectionTool) => mounted?.update({ selectionTool }),
     );
     watch(
       () => [props.options?.wasmUrl, props.options?.maxPixelRatio] as const,

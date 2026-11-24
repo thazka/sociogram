@@ -1,7 +1,8 @@
 struct Params {
-    counts: vec4<u32>, // node_count, grid_dim, 0, 0
+    counts: vec4<u32>, // node_count, grid_dim, held_index (0xFFFFFFFF = none), 0
     a: vec4<f32>,      // gravity, repulsion, link_spring, link_distance
     b: vec4<f32>,      // friction, alpha, space_half, 0
+    held: vec4<f32>,   // held x, held y, 0, 0
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -10,6 +11,9 @@ struct Params {
 @group(0) @binding(3) var<storage, read_write> vel: array<vec2<f32>>;
 @group(0) @binding(4) var<storage, read> offsets: array<u32>;
 @group(0) @binding(5) var<storage, read> neighbors: array<u32>;
+// One word per node, 1 = pinned. Pinned nodes ignore the forces but still
+// take part in the grid sums, so others are pushed and pulled by them.
+@group(0) @binding(6) var<storage, read> pinned: array<u32>;
 
 // Hierarchical grid, finest level first, one vec4<i32> per cell:
 // (count, sum_x, sum_y, unused), the sums in fixed point (FIXED_SCALE)
@@ -73,6 +77,19 @@ fn accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn step(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= params.counts.x) {
+        return;
+    }
+    // A held node follows the pointer; a pinned node stays where it is. Both
+    // have no velocity, and both still count in `accumulate`.
+    if (i == params.counts.z) {
+        let half_space = params.b.z;
+        pos_out[i] = clamp(params.held.xy, vec2<f32>(-half_space), vec2<f32>(half_space));
+        vel[i] = vec2<f32>(0.0);
+        return;
+    }
+    if (pinned[i] != 0u) {
+        pos_out[i] = pos_in[i];
+        vel[i] = vec2<f32>(0.0);
         return;
     }
     let g = params.counts.y;

@@ -1,52 +1,28 @@
 import { WasmLoadError, WebGpuUnsupportedError } from "./errors.js";
 import init, { Sociogram } from "./wasm/sociogram_web.js";
+import { toIndices } from "./indices.js";
+import { DomOverlay } from "./overlay.js";
+import { adaptEngine, OP_CODE } from "./pointer-engine.js";
+import { PointerMachine } from "./pointer.js";
+import type { ClickSelection, SelectOp, SelectionTool } from "./pointer.js";
 
 /** Largest drawing-buffer side, matching the engine's limit. */
 const MAX_SIDE = 8192;
-/** Pointer movement (CSS pixels) below which a press counts as a click. */
-const CLICK_SLOP = 4;
 /** Frames between position snapshots used for picking. */
 const SNAPSHOT_EVERY = 6;
 const CAPTURE_TIMEOUT_MS = 10_000;
 const IDLE_TIMEOUT_MS = 30_000;
 
-export interface GraphData {
-  nodeCount: number;
-  /** Flat `[source, target, source, target, ...]`. */
-  edges: ArrayLike<number> | Uint32Array;
-  /** Two numbers per node. Random if omitted. */
-  positions?: Float32Array;
-  /** One radius per node, in pixels at zoom 1. */
-  sizes?: Float32Array;
-  /** RGBA (0..1), four numbers per node. */
-  colors?: Float32Array;
-}
+import type {
+  GraphData,
+  LinkFadeMode,
+  NodeDragEvent,
+  SelectionChange,
+  SociogramEvents,
+  SociogramOptions,
+} from "./types.js";
 
-/**
- * How long links fade out (they dominate the cost of drawing large graphs).
- *
- * - `"auto"` (default): nothing changes for small graphs; graphs with 50,000 or
- *   more links fade links between 1/8 and 3/8 of the viewport size.
- * - `"off"`: always draw every link at full strength.
- * - `{ startPx, endPx }`: fade between these on-screen lengths, in CSS pixels.
- */
-export type LinkFadeMode = "auto" | "off" | { startPx: number; endPx: number };
-
-export interface SociogramOptions {
-  /** Where to load `sociogram_web_bg.wasm` from. Defaults to next to the module. */
-  wasmUrl?: string | URL;
-  /** Upper bound for the device pixel ratio used for the drawing buffer. */
-  maxPixelRatio?: number;
-}
-
-export interface SociogramEvents {
-  /** Fired when the node under the pointer changes (`null` = none). */
-  nodeHover: (index: number | null) => void;
-  /** Fired for a click (not a drag) on a node. */
-  nodeClick: (index: number) => void;
-  /** Fired once if the render loop stopped because of an error. */
-  error: (error: Error) => void;
-}
+export type { GraphData, LinkFadeMode, NodeDragEvent, SelectionChange, SociogramEvents, SociogramOptions };
 
 type Listeners = { [K in keyof SociogramEvents]: Set<SociogramEvents[K]> };
 
@@ -68,7 +44,15 @@ export { WasmLoadError, WebGpuUnsupportedError };
 export class SociogramView {
   readonly #canvas: HTMLCanvasElement;
   readonly #maxPixelRatio: number;
-  readonly #listeners: Listeners = { nodeHover: new Set(), nodeClick: new Set(), error: new Set() };
+  readonly #listeners: Listeners = {
+    nodeHover: new Set(),
+    nodeClick: new Set(),
+    nodeDragStart: new Set(),
+    nodeDrag: new Set(),
+    nodeDragEnd: new Set(),
+    selectionChange: new Set(),
+    error: new Set(),
+  };
   readonly #cleanup: Array<() => void> = [];
   #engine: Sociogram | undefined;
   #raf = 0;
@@ -76,12 +60,18 @@ export class SociogramView {
   #hovered = -1;
   #pointer: { x: number; y: number } | undefined;
   #hoverDirty = false;
-  #drag: { x: number; y: number; moved: number } | undefined;
+  #dragNodes: boolean;
+  #tool: SelectionTool = "none";
+  #clickSelection: ClickSelection;
+  #machine: PointerMachine | undefined;
+  #overlay: DomOverlay | undefined;
 
-  private constructor(canvas: HTMLCanvasElement, engine: Sociogram, maxPixelRatio: number) {
+  private constructor(canvas: HTMLCanvasElement, engine: Sociogram, maxPixelRatio: number, options: SociogramOptions) {
     this.#canvas = canvas;
     this.#engine = engine;
     this.#maxPixelRatio = maxPixelRatio;
+    this.#dragNodes = options.dragNodes ?? true;
+    this.#clickSelection = options.clickSelection ?? "node";
   }
 
   /** Create a view on `canvas`. Rejects with `WebGpuUnsupportedError` without WebGPU. */
@@ -103,7 +93,14 @@ export class SociogramView {
     } catch (e) {
       throw new WebGpuUnsupportedError(e instanceof Error ? e.message : String(e));
     }
-    const view = new SociogramView(canvas, engine, options.maxPixelRatio ?? Infinity);
+    const heat = options.dragHeat ?? 0.3;
+    if (!Number.isFinite(heat) || heat < 0 || heat > 1) {
+      engine.free();
+      throw new RangeError("dragHeat must be between 0 and 1");
+    }
+    engine.set_drag_heat(heat);
+    engine.set_dim_unselected(options.dimUnselected ?? true);
+    const view = new SociogramView(canvas, engine, options.maxPixelRatio ?? Infinity, options);
     view.#attach();
     return view;
   }
@@ -114,8 +111,11 @@ export class SociogramView {
 
   /** Replace the graph. Throws on invalid data and keeps the previous graph. */
   setData(data: GraphData): void {
+    const engine = this.#live();
     const edges = data.edges instanceof Uint32Array ? data.edges : Uint32Array.from(data.edges);
-    this.#live().set_data(data.nodeCount, edges, data.positions, data.sizes, data.colors);
+    const hadSelection = engine.selection_active();
+    engine.set_data(data.nodeCount, edges, data.positions, data.sizes, data.colors);
+    if (hadSelection) this.#emitSelection(); // new data starts without a selection
   }
 
   on<K extends keyof SociogramEvents>(event: K, listener: SociogramEvents[K]): () => void {
@@ -131,6 +131,70 @@ export class SociogramView {
   /** Make the layout move again. */
   reheat(): void {
     this.#live().reheat();
+  }
+
+  /** Switch node dragging on or off (off: a drag always pans). */
+  setDragNodes(on: boolean): void {
+    this.#live();
+    this.#dragNodes = on;
+  }
+
+  setClickSelection(mode: ClickSelection): void {
+    if (mode !== "node" && mode !== "neighbours" && mode !== "none") {
+      throw new RangeError(`unknown clickSelection "${String(mode)}"`);
+    }
+    this.#live();
+    this.#clickSelection = mode;
+  }
+
+  /** Choose what a drag on the canvas does: nothing special, a rectangle or a lasso. */
+  setSelectionTool(tool: SelectionTool): void {
+    if (tool !== "none" && tool !== "rectangle" && tool !== "lasso") {
+      throw new RangeError(`unknown selection tool "${String(tool)}"`);
+    }
+    this.#live();
+    this.#tool = tool;
+    if (tool === "none") this.#machine?.cancel();
+  }
+
+  /** Pin exactly these nodes; an empty list unpins all. Throws `RangeError` for an unknown index. */
+  setPinnedNodes(indices: ArrayLike<number>): void {
+    const engine = this.#live();
+    engine.set_pinned(toIndices(indices, engine.node_count()));
+  }
+
+  getPinnedNodes(): Uint32Array {
+    return Uint32Array.from(this.#live().pinned());
+  }
+
+  /** Select these nodes (and the links among them). Throws `RangeError` for an unknown index. */
+  setSelection(indices: ArrayLike<number>, mode: SelectOp = "replace"): void {
+    const engine = this.#live();
+    engine.select_nodes(toIndices(indices, engine.node_count()), OP_CODE[mode]);
+    this.#emitSelection();
+  }
+
+  getSelection(): Uint32Array {
+    return Uint32Array.from(this.#live().selected_nodes());
+  }
+
+  clearSelection(): void {
+    this.#live().clear_selection();
+    this.#emitSelection();
+  }
+
+  /** Dim everything outside the selection (default) or draw it normally. */
+  setDimUnselected(on: boolean): void {
+    this.#live().set_dim_unselected(on);
+  }
+
+  /** Where a node is on screen, in CSS pixels relative to the viewport. */
+  nodeScreenPosition(index: number): { x: number; y: number } | undefined {
+    const p = this.#live().node_screen_position(index);
+    if (p.length < 2) return undefined;
+    const r = this.#canvas.getBoundingClientRect();
+    const scale = this.#canvas.width / Math.max(r.width, 1);
+    return { x: r.left + (p[0] as number) / scale, y: r.top + (p[1] as number) / scale };
   }
 
   /**
@@ -202,6 +266,8 @@ export class SociogramView {
     if (engine === undefined) return;
     this.#engine = undefined;
     cancelAnimationFrame(this.#raf);
+    this.#machine?.cancel();
+    this.#overlay?.hide();
     for (const undo of this.#cleanup.splice(0)) undo();
     for (const set of Object.values(this.#listeners)) (set as Set<unknown>).clear();
     engine.destroy();
@@ -211,6 +277,15 @@ export class SociogramView {
   #live(): Sociogram {
     if (this.#engine === undefined) throw new Error("this SociogramView was destroyed");
     return this.#engine;
+  }
+
+  #emitSelection(): void {
+    const engine = this.#engine;
+    if (engine === undefined) return;
+    this.#emit("selectionChange", {
+      nodes: Uint32Array.from(engine.selected_nodes()),
+      linkCount: engine.selected_link_count(),
+    });
   }
 
   #emit<K extends keyof SociogramEvents>(event: K, ...args: Parameters<SociogramEvents[K]>): void {
@@ -241,41 +316,47 @@ export class SociogramView {
     const canvas = this.#canvas;
     this.#observeSize();
 
+    const engine = this.#live();
+    const toInput = (e: PointerEvent) => ({
+      ...this.#toCanvas(e),
+      clientX: e.clientX,
+      clientY: e.clientY,
+      shiftKey: e.shiftKey,
+      altKey: e.altKey,
+    });
+    this.#overlay = new DomOverlay(document);
+    const machine = new PointerMachine({
+      engine: adaptEngine(engine),
+      overlay: this.#overlay,
+      config: () => ({ dragNodes: this.#dragNodes, tool: this.#tool, clickSelection: this.#clickSelection }),
+      scale: () => canvas.width / Math.max(canvas.getBoundingClientRect().width, 1),
+      hooks: {
+        dragStart: (index, x, y) => this.#emit("nodeDragStart", { index, x, y }),
+        drag: (index, x, y) => this.#emit("nodeDrag", { index, x, y }),
+        dragEnd: (index, x, y) => this.#emit("nodeDragEnd", { index, x, y }),
+        click: (index) => this.#emit("nodeClick", index),
+        selectionChanged: () => this.#emitSelection(),
+      },
+    });
+    this.#machine = machine;
+
     this.#listen(canvas, "pointerdown", (e: PointerEvent) => {
+      if (e.button !== 0 || !e.isPrimary) return; // left button or first touch only
       canvas.setPointerCapture(e.pointerId);
-      this.#drag = { x: e.clientX, y: e.clientY, moved: 0 };
+      machine.down(toInput(e));
     });
     this.#listen(canvas, "pointermove", (e: PointerEvent) => {
-      const engine = this.#engine;
-      if (engine === undefined) return;
-      const p = this.#toCanvas(e);
-      this.#pointer = p;
-      if (this.#drag !== undefined) {
-        const dx = e.clientX - this.#drag.x;
-        const dy = e.clientY - this.#drag.y;
-        this.#drag.moved += Math.abs(dx) + Math.abs(dy);
-        this.#drag.x = e.clientX;
-        this.#drag.y = e.clientY;
-        const scale = canvas.width / Math.max(canvas.getBoundingClientRect().width, 1);
-        engine.pan_by(dx * scale, dy * scale);
-      } else {
-        this.#hoverDirty = true;
-      }
+      this.#pointer = this.#toCanvas(e);
+      if (machine.busy) machine.move(toInput(e));
+      else this.#hoverDirty = true;
     });
-    const release = (e: PointerEvent): void => {
-      const drag = this.#drag;
-      this.#drag = undefined;
+    this.#listen(canvas, "pointerup", (e: PointerEvent) => {
       if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
-      if (drag !== undefined && drag.moved < CLICK_SLOP && this.#engine !== undefined) {
-        const p = this.#toCanvas(e);
-        const hit = this.#engine.pick(p.x, p.y);
-        if (hit >= 0) this.#emit("nodeClick", hit);
-      }
-    };
-    this.#listen(canvas, "pointerup", release);
-    this.#listen(canvas, "pointercancel", () => {
-      this.#drag = undefined;
+      machine.up(toInput(e));
     });
+    this.#listen(canvas, "pointercancel", () => machine.cancel());
+    this.#listen(canvas, "lostpointercapture", () => machine.cancel());
+    this.#listen(window, "blur", () => machine.cancel());
     this.#listen(canvas, "pointerleave", () => {
       this.#pointer = undefined;
       this.#setHover(-1);
@@ -308,7 +389,7 @@ export class SociogramView {
         if (this.#frameCount % SNAPSHOT_EVERY === 0) engine.request_snapshot();
         engine.poll_snapshot();
         this.#frameCount++;
-        if (this.#hoverDirty && this.#pointer !== undefined && this.#drag === undefined) {
+        if (this.#hoverDirty && this.#pointer !== undefined && !machine.busy) {
           this.#hoverDirty = false;
           this.#setHover(engine.pick(this.#pointer.x, this.#pointer.y));
         }

@@ -15,6 +15,9 @@ function fakeView() {
     setLinkFade: vi.fn<(m: unknown) => void>(),
     destroy: vi.fn<() => void>(),
     whenIdle: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+    setDragNodes: vi.fn<(on: boolean) => void>(),
+    setPinnedNodes: vi.fn<(indices: ArrayLike<number>) => void>(),
+    setSelectionTool: vi.fn<(tool: string) => void>(),
     on: vi.fn((event: string, fn: Listener) => {
       let set = listeners.get(event);
       if (set === undefined) listeners.set(event, (set = new Set()));
@@ -389,6 +392,80 @@ describe("mountSociogram", () => {
       await expect(m.ready).resolves.toBeUndefined();
       expect(onError.mock.calls[0]?.[1]).toBe("render");
       expect(m.view).toBe(f.asView); // the view itself stays usable
+    });
+  });
+
+  describe("selection and drag props", () => {
+    it("applies dragNodes, pinnedNodes and selectionTool when the view is ready and when they change", async () => {
+      const { deps, container, pending } = setup();
+      const pins = [1, 2];
+      const m = mountSociogram(
+        container,
+        { initial: { dragNodes: false, pinnedNodes: pins, selectionTool: "lasso" } },
+        deps,
+      );
+      const f = fakeView();
+      pending.resolve(f.asView);
+      await flush();
+      expect(f.view.setDragNodes).toHaveBeenCalledExactlyOnceWith(false);
+      expect(f.view.setPinnedNodes).toHaveBeenCalledExactlyOnceWith(pins);
+      expect(f.view.setSelectionTool).toHaveBeenCalledExactlyOnceWith("lasso");
+
+      m.update({ selectionTool: "rectangle", pinnedNodes: pins });
+      expect(f.view.setSelectionTool).toHaveBeenLastCalledWith("rectangle");
+      expect(f.view.setPinnedNodes).toHaveBeenCalledTimes(1); // same array reference: not applied again
+      const next = [3];
+      m.update({ pinnedNodes: next });
+      expect(f.view.setPinnedNodes).toHaveBeenLastCalledWith(next);
+    });
+
+    it("applies the pins again after new data, because new data starts unpinned", async () => {
+      const { deps, container, pending } = setup();
+      const pins = [1];
+      const m = mountSociogram(container, { initial: { pinnedNodes: pins } }, deps);
+      const f = fakeView();
+      pending.resolve(f.asView);
+      await flush();
+      expect(f.view.setPinnedNodes).toHaveBeenCalledTimes(1);
+      m.update({ data: graph() });
+      expect(f.view.setData).toHaveBeenCalledTimes(1);
+      expect(f.view.setPinnedNodes).toHaveBeenCalledTimes(2);
+      expect(f.view.setPinnedNodes).toHaveBeenLastCalledWith(pins);
+    });
+
+    it("reports a rejected pin list as a data error and keeps the view", async () => {
+      const { deps, container, pending } = setup();
+      const onError = vi.fn();
+      mountSociogram(
+        container,
+        { initial: { pinnedNodes: [99] }, callbacks: () => ({ onError }) },
+        deps,
+      );
+      const f = fakeView();
+      f.view.setPinnedNodes.mockImplementation(() => {
+        throw new RangeError("node 99 is out of range");
+      });
+      pending.resolve(f.asView);
+      await flush();
+      expect(onError.mock.calls[0]?.[1]).toBe("data");
+    });
+
+    it("forwards drag and selection events to the callbacks and stops after destroy", async () => {
+      const { deps, container, pending } = setup();
+      const onSelectionChange = vi.fn();
+      const onNodeDragEnd = vi.fn();
+      const m = mountSociogram(container, { callbacks: () => ({ onSelectionChange, onNodeDragEnd }) }, deps);
+      const f = fakeView();
+      pending.resolve(f.asView);
+      await flush();
+      const sel = { nodes: new Uint32Array([1]), linkCount: 0 };
+      f.emit("selectionChange", sel);
+      f.emit("nodeDragEnd", { index: 1, x: 2, y: 3 });
+      expect(onSelectionChange).toHaveBeenCalledExactlyOnceWith(sel);
+      expect(onNodeDragEnd).toHaveBeenCalledExactlyOnceWith({ index: 1, x: 2, y: 3 });
+      m.destroy();
+      expect(f.listenerCount("selectionChange")).toBe(0);
+      expect(f.listenerCount("nodeDragEnd")).toBe(0);
     });
   });
 });

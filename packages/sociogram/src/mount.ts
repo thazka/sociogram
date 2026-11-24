@@ -11,7 +11,15 @@
 // has had a WebGPU context must not be shared between a destroyed view and its
 // replacement, and the framework never touches the canvas it did not render.
 
-import type { GraphData, LinkFadeMode, SociogramOptions, SociogramView } from "./view.js";
+import type { SelectionTool } from "./pointer.js";
+import type {
+  GraphData,
+  LinkFadeMode,
+  NodeDragEvent,
+  SelectionChange,
+  SociogramOptions,
+  SociogramView,
+} from "./view.js";
 
 /**
  * Where an error came from. Wrappers show their `fallback` only for `"create"`:
@@ -30,6 +38,10 @@ export interface MountCallbacks {
   onError?: (error: Error, phase: MountErrorPhase) => void;
   onNodeHover?: (index: number | null) => void;
   onNodeClick?: (index: number) => void;
+  onNodeDragStart?: (e: NodeDragEvent) => void;
+  onNodeDrag?: (e: NodeDragEvent) => void;
+  onNodeDragEnd?: (e: NodeDragEvent) => void;
+  onSelectionChange?: (e: SelectionChange) => void;
 }
 
 /** What the wrapper wants on screen. Both fields are optional. */
@@ -37,6 +49,11 @@ export interface MountProps {
   /** Applied when the reference changes. Pass a new object to replace the graph. */
   data?: GraphData | undefined;
   linkFade?: LinkFadeMode | undefined;
+  /** Drag nodes with the pointer. Default `true`. */
+  dragNodes?: boolean | undefined;
+  /** Indices of pinned nodes. The same array reference is applied once. */
+  pinnedNodes?: ArrayLike<number> | undefined;
+  selectionTool?: SelectionTool | undefined;
 }
 
 /** The parts of the DOM and of `SociogramView` this helper needs, so tests can fake them. */
@@ -110,6 +127,9 @@ export function mountSociogram(
   let appliedData: GraphData | undefined;
   let appliedFade: LinkFadeMode | undefined;
   let fadeApplied = false;
+  let appliedDrag: boolean | undefined;
+  let appliedPins: ArrayLike<number> | undefined;
+  let appliedTool: SelectionTool | undefined;
 
   const report = (e: unknown, phase: MountErrorPhase): void => {
     if (!destroyed) callbacks().onError?.(toError(e), phase);
@@ -122,6 +142,7 @@ export function mountSociogram(
       appliedData = data; // remember even on failure: do not retry the same bad object forever
       try {
         view.setData(data);
+        appliedPins = undefined; // new data starts unpinned: apply the pins again below
       } catch (e) {
         report(e, "data");
       }
@@ -131,6 +152,26 @@ export function mountSociogram(
       appliedFade = linkFade;
       try {
         view.setLinkFade(linkFade);
+      } catch (e) {
+        report(e, "data");
+      }
+    }
+    if (wanted.dragNodes !== undefined && wanted.dragNodes !== appliedDrag) {
+      appliedDrag = wanted.dragNodes;
+      view.setDragNodes(wanted.dragNodes);
+    }
+    if (wanted.selectionTool !== undefined && wanted.selectionTool !== appliedTool) {
+      appliedTool = wanted.selectionTool;
+      try {
+        view.setSelectionTool(wanted.selectionTool);
+      } catch (e) {
+        report(e, "data");
+      }
+    }
+    if (wanted.pinnedNodes !== undefined && wanted.pinnedNodes !== appliedPins) {
+      appliedPins = wanted.pinnedNodes; // remember even on failure, like data
+      try {
+        view.setPinnedNodes(wanted.pinnedNodes);
       } catch (e) {
         report(e, "data");
       }
@@ -151,6 +192,10 @@ export function mountSociogram(
       unsubscribe.push(
         created.on("nodeHover", (i) => callbacks().onNodeHover?.(i)),
         created.on("nodeClick", (i) => callbacks().onNodeClick?.(i)),
+        created.on("nodeDragStart", (e) => callbacks().onNodeDragStart?.(e)),
+        created.on("nodeDrag", (e) => callbacks().onNodeDrag?.(e)),
+        created.on("nodeDragEnd", (e) => callbacks().onNodeDragEnd?.(e)),
+        created.on("selectionChange", (e) => callbacks().onSelectionChange?.(e)),
         created.on("error", (e) => report(e, "render")),
       );
       apply();
@@ -198,6 +243,9 @@ function definedOnly(props: MountProps): MountProps {
   const out: MountProps = {};
   if (props.data !== undefined) out.data = props.data;
   if (props.linkFade !== undefined) out.linkFade = props.linkFade;
+  if (props.dragNodes !== undefined) out.dragNodes = props.dragNodes;
+  if (props.pinnedNodes !== undefined) out.pinnedNodes = props.pinnedNodes;
+  if (props.selectionTool !== undefined) out.selectionTool = props.selectionTool;
   return out;
 }
 

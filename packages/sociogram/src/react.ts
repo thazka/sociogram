@@ -12,7 +12,15 @@ import { createElement, forwardRef, useEffect, useImperativeHandle, useRef, useS
 import type { CSSProperties, ReactNode } from "react";
 import { mountSociogram } from "./mount.js";
 import type { Mounted, MountErrorPhase } from "./mount.js";
-import type { GraphData, LinkFadeMode, SociogramOptions, SociogramView } from "./view.js";
+import type { SelectionTool } from "./pointer.js";
+import type {
+  GraphData,
+  LinkFadeMode,
+  NodeDragEvent,
+  SelectionChange,
+  SociogramOptions,
+  SociogramView,
+} from "./view.js";
 
 export interface SociogramProps {
   /** The graph. Pass a new object to replace it; the same object is applied once. */
@@ -26,6 +34,16 @@ export interface SociogramProps {
   onError?: (error: Error, phase: MountErrorPhase) => void;
   onNodeHover?: (index: number | null) => void;
   onNodeClick?: (index: number) => void;
+  /** Drag nodes with the pointer. Default `true`. */
+  dragNodes?: boolean;
+  /** Indices of pinned nodes. Keep the array reference stable (state or `useMemo`): a new array re-applies the pins. */
+  pinnedNodes?: ArrayLike<number>;
+  /** Rectangle or lasso selection tool. `"none"` (default) leaves the pointer for dragging and panning. */
+  selectionTool?: SelectionTool;
+  onSelectionChange?: (e: SelectionChange) => void;
+  onNodeDragStart?: (e: NodeDragEvent) => void;
+  onNodeDrag?: (e: NodeDragEvent) => void;
+  onNodeDragEnd?: (e: NodeDragEvent) => void;
   className?: string;
   /** The component fills its parent by default: give the parent a height. */
   style?: CSSProperties;
@@ -46,7 +64,7 @@ export interface SociogramHandle {
 const fill: CSSProperties = { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 };
 
 export const Sociogram = forwardRef<SociogramHandle, SociogramProps>(function Sociogram(props, ref) {
-  const { data, linkFade, className, style, fallback } = props;
+  const { data, linkFade, dragNodes, pinnedNodes, selectionTool, className, style, fallback } = props;
   const wasmUrl = props.options?.wasmUrl;
   const maxPixelRatio = props.options?.maxPixelRatio;
 
@@ -62,15 +80,30 @@ export const Sociogram = forwardRef<SociogramHandle, SociogramProps>(function So
     if (host === null) return;
     setFailure(undefined);
     const options: SociogramOptions = {};
+    const given = latest.current.options;
     if (wasmUrl !== undefined) options.wasmUrl = wasmUrl;
     if (maxPixelRatio !== undefined) options.maxPixelRatio = maxPixelRatio;
+    // Create-time only: changing these later does not remount the view.
+    if (given?.dragHeat !== undefined) options.dragHeat = given.dragHeat;
+    if (given?.clickSelection !== undefined) options.clickSelection = given.clickSelection;
+    if (given?.dimUnselected !== undefined) options.dimUnselected = given.dimUnselected;
     const mounted = mountSociogram(host, {
       options,
-      initial: { data: latest.current.data, linkFade: latest.current.linkFade },
+      initial: {
+        data: latest.current.data,
+        linkFade: latest.current.linkFade,
+        dragNodes: latest.current.dragNodes,
+        pinnedNodes: latest.current.pinnedNodes,
+        selectionTool: latest.current.selectionTool,
+      },
       callbacks: () => ({
         onReady: (view) => latest.current.onReady?.(view),
         onNodeHover: (i) => latest.current.onNodeHover?.(i),
         onNodeClick: (i) => latest.current.onNodeClick?.(i),
+        onNodeDragStart: (e) => latest.current.onNodeDragStart?.(e),
+        onNodeDrag: (e) => latest.current.onNodeDrag?.(e),
+        onNodeDragEnd: (e) => latest.current.onNodeDragEnd?.(e),
+        onSelectionChange: (e) => latest.current.onSelectionChange?.(e),
         onError: (error, phase) => {
           if (phase === "create") setFailure(error);
           latest.current.onError?.(error, phase);
@@ -85,8 +118,8 @@ export const Sociogram = forwardRef<SociogramHandle, SociogramProps>(function So
   }, [wasmUrl, maxPixelRatio]);
 
   useEffect(() => {
-    mountedRef.current?.update({ data, linkFade });
-  }, [data, linkFade]);
+    mountedRef.current?.update({ data, linkFade, dragNodes, pinnedNodes, selectionTool });
+  }, [data, linkFade, dragNodes, pinnedNodes, selectionTool]);
 
   useImperativeHandle(
     ref,
